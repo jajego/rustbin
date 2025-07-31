@@ -1,17 +1,17 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-
-use crate::models::LoggedRequest;
+use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 
 #[derive(Clone)]
 pub struct AppState {
-   pub bins: Arc<Mutex<HashMap<String, Vec<LoggedRequest>>>>,
+    pub db: SqlitePool,
 }
 
 impl AppState {
-   pub fn new() -> Self {
-      AppState {
-         bins: Arc::new(Mutex::new(HashMap::new())),
-      }
-   }
+    pub async fn new() -> Result<Self, sqlx::Error> {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(5)
+            .connect(&std::env::var("DATABASE_URL").expect("DATABASE_URL must be set"))
+            .await?;
+
+        Ok(AppState { db: pool })
+    }
 }

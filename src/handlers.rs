@@ -1,68 +1,126 @@
 use axum::{
-    extract::{Path, State, Query},
-    http::{HeaderMap, Method, Request},
     body::Body,
+    extract::{Path, State, Query, ConnectInfo},
+    http::{Request},
     Json,
 };
-use uuid::Uuid;
 use chrono::Utc;
-use std::collections::HashMap;
-
 use http_body_util::BodyExt;
+use sqlx::query;
+use std::{collections::HashMap, net::SocketAddr};
+use tracing::{info, error};
+use uuid::Uuid;
 
-use crate::{state::AppState, models::LoggedRequest, models::PingResponse, models::PingQuery};
+use crate::{
+    models::{LoggedRequest, PingQuery, PingResponse},
+    state::AppState,
+};
 
-pub async fn create_bin(State(state): State<AppState>) -> Json<HashMap<&'static str, String>> {
+pub async fn create_bin(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+) -> Json<HashMap<&'static str, String>> {
     let id = Uuid::new_v4().to_string();
-    state.bins.lock().unwrap().insert(id.clone(), Vec::new());
-    Json(HashMap::from([("bin_id", id)]))
+    info!(%id, %addr, "Creating new bin");
+
+    let result = query("INSERT INTO bins (id) VALUES (?)")
+        .bind(&id)
+        .execute(&state.db)
+        .await;
+
+    match result {
+        Ok(_) => {
+            info!(%id, %addr, "Successfully created bin");
+            Json(HashMap::from([("bin_id", id)]))
+        }
+        Err(err) => {
+            error!(%id, %addr, %err, "Failed to create bin");
+            panic!("Failed to insert bin");
+        }
+    }
 }
 
 pub async fn log_request(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    method: Method,
-    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request<Body>,
 ) -> String {
-    let body = req.into_body();
+    let (parts, body) = req.into_parts();
+
+    let method = parts.method;
+    let headers = parts.headers;
+
     let body_bytes = body.collect().await.unwrap().to_bytes();
     let body_str = String::from_utf8_lossy(&body_bytes).to_string();
 
-    let mut bins = state.bins.lock().unwrap();
-    if let Some(logs) = bins.get_mut(&id) {
-        let log = LoggedRequest {
-            method: method.to_string(),
-            headers: headers
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-                .collect(),
-            body: body_str,
-            timestamp: Utc::now().to_rfc3339(),
-        };
-        logs.push(log);
-        "Request logged".to_string()
-    } else {
-        "Bin not found".to_string()
+    let headers_json = serde_json::to_string(
+        &headers
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect::<HashMap<_, _>>(),
+    ).unwrap();
+
+    let result = query(
+        "INSERT INTO requests (bin_id, method, headers, body, timestamp) VALUES (?, ?, ?, ?, ?)"
+    )
+    .bind(&id)
+    .bind(method.to_string())
+    .bind(headers_json.clone()) // Clone for easy use in info! below
+    .bind(body_str.clone())
+    .bind(Utc::now().to_rfc3339())
+    .execute(&state.db)
+    .await;
+
+    match result {
+        Ok(_) => {
+            info!(%id, %addr, %method, headers = %headers_json, body = %body_str, "Request logged");
+            "Request logged".to_string()
+        },
+        Err(err) => {
+            error!(%id, %addr, %err, "DB error");
+            "Bin not found or error logging request".to_string()
+        }
     }
 }
 
 pub async fn inspect_bin(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> Json<Vec<LoggedRequest>> {
-    let bins = state.bins.lock().unwrap();
-    if let Some(logs) = bins.get(&id) {
-        Json(logs.clone())
-    } else {
-        Json(vec![])
+    info!(%id, %addr, "Inspecting bin");
+
+    let rows = sqlx::query_as::<_, LoggedRequest>(
+        r#"
+        SELECT 
+            method, 
+            headers, 
+            body, 
+            timestamp
+        FROM requests
+        WHERE bin_id = ?
+        ORDER BY id
+        "#
+    )
+    .bind(&id)
+    .fetch_all(&state.db)
+    .await;
+
+    match rows {
+        Ok(data) => {
+            info!(%id, %addr, count = data.len(), "Successfully fetched logged requests");
+            Json(data)
+        }
+        Err(err) => {
+            error!(%id, %addr, %err, "Failed to fetch logged requests");
+            Json(vec![])
+        }
     }
 }
 
 pub async fn ping(Query(query): Query<PingQuery>) -> Json<PingResponse> {
-    let message = query
-        .message
-        .unwrap_or_else(|| "pong".to_string());
+    let message = query.message.unwrap_or_else(|| "pong".to_string());
 
     Json(PingResponse {
         ok: true,

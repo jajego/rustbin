@@ -1,0 +1,3 @@
+- limit size of headers
+- limit # per bin
+- do not expire active connections

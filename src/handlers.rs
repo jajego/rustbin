@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, State, Query},
     http::{HeaderMap, Method, Request},
     body::Body,
     Json,
@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use http_body_util::BodyExt;
 
-use crate::{state::AppState, models::LoggedRequest};
+use crate::{state::AppState, models::LoggedRequest, models::PingResponse, models::PingQuery};
 
 pub async fn create_bin(State(state): State<AppState>) -> Json<HashMap<&'static str, String>> {
     let id = Uuid::new_v4().to_string();
@@ -57,4 +57,15 @@ pub async fn inspect_bin(
     } else {
         Json(vec![])
     }
+}
+
+pub async fn ping(Query(query): Query<PingQuery>) -> Json<PingResponse> {
+    let message = query
+        .message
+        .unwrap_or_else(|| "pong".to_string());
+
+    Json(PingResponse {
+        ok: true,
+        message,
+    })
 }

@@ -7,3 +7,15 @@ pub struct LoggedRequest {
    pub body: String,
    pub timestamp: String,
 }
+
+// Debug structs
+#[derive(Serialize)]
+pub struct PingResponse {
+   pub ok: bool,
+   pub message: String,
+}
+
+#[derive(Deserialize)]
+pub struct PingQuery {
+    pub message: Option<String>,
+}

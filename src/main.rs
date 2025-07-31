@@ -16,6 +16,7 @@ async fn main() {
         .route("/create", post(handlers::create_bin))
         .route("/bin/:id", post(handlers::log_request))
         .route("/bin/:id/inspect", get(handlers::inspect_bin))
+        .route("/ping", get(handlers::ping))
         .with_state(app_state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));

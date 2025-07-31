@@ -5,27 +5,30 @@ use axum::{
 use std::net::SocketAddr;
 use tower_http::trace::{TraceLayer, DefaultMakeSpan, DefaultOnResponse};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use tracing_subscriber::EnvFilter;
 
 mod handlers;
 mod state;
 mod models;
+mod tasks;
 
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
 
     tracing_subscriber::registry()
-        .with(EnvFilter::from_default_env())
+        // .with(EnvFilter::from_default_env())
         .with(tracing_subscriber::fmt::layer())
         .init();
 
     let app_state = state::AppState::new().await.expect("Failed to init DB");
 
+    tasks::cleanup::start_cleanup_task(app_state.db.clone()).await;
+
     let app = Router::new()
         .route("/create", post(handlers::create_bin))
         .route("/bin/:id", any(handlers::log_request)) // `any`` for now, but may make sense to limit to POST only
         .route("/bin/:id/inspect", get(handlers::inspect_bin))
+        .route("/bin/:id/expiry", get(handlers::get_bin_expiration))
         .route("/ping", get(handlers::ping))
         .with_state(app_state)
         .layer(
@@ -42,4 +45,6 @@ async fn main() {
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .unwrap();
+
 }
+

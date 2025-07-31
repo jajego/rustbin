@@ -1,5 +1,6 @@
 CREATE TABLE IF NOT EXISTS bins (
-    id TEXT PRIMARY KEY
+    id TEXT PRIMARY KEY,
+    last_updated TEXT
 );
 
 CREATE TABLE IF NOT EXISTS requests (

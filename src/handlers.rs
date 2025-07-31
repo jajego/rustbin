@@ -7,6 +7,7 @@ use axum::{
 use chrono::Utc;
 use http_body_util::BodyExt;
 use sqlx::query;
+use sqlx::Row;
 use std::{collections::HashMap, net::SocketAddr};
 use tracing::{info, error};
 use uuid::Uuid;
@@ -23,8 +24,11 @@ pub async fn create_bin(
     let id = Uuid::new_v4().to_string();
     info!(%id, %addr, "Creating new bin");
 
-    let result = query("INSERT INTO bins (id) VALUES (?)")
+    let now = Utc::now().to_rfc3339();
+
+    let result = query("INSERT INTO bins (id, last_updated) VALUES (?, ?)")
         .bind(&id)
+        .bind(&now)
         .execute(&state.db)
         .await;
 
@@ -38,6 +42,19 @@ pub async fn create_bin(
             panic!("Failed to insert bin");
         }
     }
+}
+
+async fn update_last_updated(
+    state: &AppState,
+    id: &str,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    query("UPDATE bins SET last_updated = ? WHERE id = ?")
+        .bind(&now)
+        .bind(id)
+        .execute(&state.db)
+        .await?;
+    Ok(())
 }
 
 pub async fn log_request(
@@ -75,6 +92,7 @@ pub async fn log_request(
     match result {
         Ok(_) => {
             info!(%id, %addr, %method, headers = %headers_json, body = %body_str, "Request logged");
+            update_last_updated(&state, &id).await.ok();
             "Request logged".to_string()
         },
         Err(err) => {
@@ -115,6 +133,27 @@ pub async fn inspect_bin(
         Err(err) => {
             error!(%id, %addr, %err, "Failed to fetch logged requests");
             Json(vec![])
+        }
+    }
+}
+
+pub async fn get_bin_expiration(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> String {
+    let row = sqlx::query("SELECT last_updated FROM bins WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.db)
+        .await;
+
+    match row {
+        Ok(row) => {
+            let last_updated: String = row.get("last_updated");
+            format!("Bin {} was last updated at {}", id, last_updated)
+        }
+        Err(err) => {
+            error!(%id, %err, "Failed to fetch bin expiration");
+            "Bin not found".to_string()
         }
     }
 }

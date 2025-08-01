@@ -5,3 +5,4 @@
 - cors
 - offer in memory option (As opposed to default sqlite)
 - when using sqlite option, prevent a user from viewing another users' bins
+- rate limiting

@@ -1,15 +1,12 @@
-use axum::{
-    routing::{get, post, any},
-    Router,
-};
-use std::net::SocketAddr;
-use tower_http::trace::{TraceLayer, DefaultMakeSpan, DefaultOnResponse};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
 mod handlers;
 mod state;
 mod models;
 mod tasks;
+mod routes;
+
+use std::net::SocketAddr;
+use tower_http::trace::{TraceLayer, DefaultMakeSpan, DefaultOnResponse};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() {
@@ -21,30 +18,19 @@ async fn main() {
         .init();
 
     let app_state = state::AppState::new().await.expect("Failed to init DB");
-
     tasks::cleanup::start_cleanup_task(app_state.db.clone()).await;
 
-    let app = Router::new()
-        .route("/create", post(handlers::create_bin))
-        .route("/bin/:id", any(handlers::log_request)) // `any`` for now, but may make sense to limit to POST only
-        .route("/bin/:id/inspect", get(handlers::inspect_bin))
-        .route("/bin/:id/expiry", get(handlers::get_bin_expiration))
-        .route("/ping", get(handlers::ping))
-        .with_state(app_state)
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(DefaultMakeSpan::new().include_headers(true))
-                .on_response(DefaultOnResponse::new().include_headers(true)),
-        );
+    let app = routes::create_router(app_state).layer(
+        TraceLayer::new_for_http()
+            .make_span_with(DefaultMakeSpan::new().include_headers(true))
+            .on_response(DefaultOnResponse::new().include_headers(true)),
+    );
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
     tracing::info!("Listening on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .unwrap();
-
 }
-

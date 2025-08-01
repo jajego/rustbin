@@ -1,0 +1,6 @@
+- limit size of headers
+- limit # per bin
+- do not expire active connections
+- uuid parsing
+- cors
+- offer in memory option (As opposed to default sqlite)

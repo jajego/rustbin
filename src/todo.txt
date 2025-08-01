@@ -2,3 +2,4 @@
 - limit # per bin
 - do not expire active connections
 - uuid parsing
+- cors

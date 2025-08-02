@@ -7,9 +7,11 @@ mod utils;
 
 use axum::http::Method;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tower_http::trace::{TraceLayer, DefaultMakeSpan, DefaultOnResponse};
 use tower_http::cors::{CorsLayer, Any};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 
 #[tokio::main]
 async fn main() {
@@ -23,6 +25,15 @@ async fn main() {
     let app_state = state::AppState::new().await.expect("Failed to init DB");
     tasks::cleanup::start_cleanup_task(app_state.db.clone()).await;
 
+    let governor_conf = Arc::new(
+       GovernorConfigBuilder::default()
+           .per_second(2)
+           .burst_size(5)
+           .finish()
+           .unwrap(),
+   );
+    tasks::limit::start_rate_limit_cleanup(&governor_conf).await;
+
     let cors = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST])
         .allow_origin(Any);
@@ -33,7 +44,10 @@ async fn main() {
 
     let app = routes::create_router(app_state)
         .layer(cors)
-        .layer(trace);
+        .layer(trace)
+        .layer(GovernorLayer {
+           config: governor_conf,
+       });
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
     tracing::info!("Listening on http://{}", addr);

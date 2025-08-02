@@ -108,7 +108,7 @@ pub async fn inspect_bin(
     State(state): State<AppState>,
     Path(id): Path<String>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-) -> Json<Vec<LoggedRequest>> {
+) -> Result<Json<Vec<LoggedRequest>>, String> {
     info!(%id, %addr, "Inspecting bin");
 
     let rows = sqlx::query_as::<_, LoggedRequest>(
@@ -130,11 +130,11 @@ pub async fn inspect_bin(
     match rows {
         Ok(data) => {
             info!(%id, %addr, count = data.len(), "Successfully fetched logged requests");
-            Json(data)
+            Ok(Json(data))
         }
         Err(err) => {
             error!(%id, %addr, %err, "Failed to fetch logged requests");
-            Json(vec![])
+            Err("Failed to fetch logged requests".to_string())
         }
     }
 }

@@ -1,21 +1,19 @@
-// mod utils;
-
 use axum::{
     body::Body,
-    extract::{Path, State, Query, ConnectInfo},
+    extract::{ConnectInfo, Path, Query, State},
     http::{Request, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse},
     Json,
 };
 use chrono::Utc;
 use http_body_util::BodyExt;
 use sqlx::query;
 use std::{collections::HashMap, net::SocketAddr};
-use tracing::{info, error};
+use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::{
-    models::{LoggedRequest, BinResponse, PingQuery, PingResponse},
+    models::{BinResponse, LoggedRequest, PingQuery, PingResponse},
     state::AppState,
 };
 use crate::utils::uuid::validate_uuid;
@@ -24,7 +22,6 @@ pub async fn create_bin(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-    println!("Creating new bin at {}", addr);
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
 
@@ -37,21 +34,15 @@ pub async fn create_bin(
         .await;
 
     match result {
-        Ok(_) => {
-            info!(%id, %addr, "Successfully created bin");
-            Ok(Json(BinResponse { bin_id: id }))
-        }
+        Ok(_) => Ok(Json(BinResponse { bin_id: id })),
         Err(err) => {
             error!(%id, %addr, %err, "Failed to create bin");
-            Err((StatusCode::INTERNAL_SERVER_ERROR, "Failed to insert bin"))
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "Failed to insert bin").into_response())
         }
     }
 }
 
-async fn update_last_updated(
-    state: &AppState,
-    id: &str,
-) -> Result<(), sqlx::Error> {
+async fn update_last_updated(state: &AppState, id: &str) -> Result<(), sqlx::Error> {
     let now = Utc::now().to_rfc3339();
     query("UPDATE bins SET last_updated = ? WHERE id = ?")
         .bind(&now)
@@ -66,11 +57,10 @@ pub async fn log_request(
     Path(id): Path<String>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request<Body>,
-) -> Result<String, String> {
-    validate_uuid(&id)?;
+) -> Result<impl IntoResponse, impl IntoResponse> {
+    validate_uuid(&id).map_err(|e| (StatusCode::BAD_REQUEST, e).into_response())?;
 
     let (parts, body) = req.into_parts();
-
     let method = parts.method;
     let headers = parts.headers;
 
@@ -82,7 +72,7 @@ pub async fn log_request(
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
             .collect::<HashMap<_, _>>(),
-    ).unwrap();
+    ).unwrap_or_else(|_| "{}".to_string());
 
     let result = query(
         "INSERT INTO requests (bin_id, request_id, method, headers, body, timestamp) VALUES (?, ?, ?, ?, ?, ?)"
@@ -104,7 +94,7 @@ pub async fn log_request(
         },
         Err(err) => {
             error!(%id, %addr, %err, "DB error");
-            Err("Bin not found or error logging request".to_string())
+            Err((StatusCode::NOT_FOUND, "Bin not found or error logging request").into_response())
         }
     }
 }
@@ -113,9 +103,8 @@ pub async fn inspect_bin(
     State(state): State<AppState>,
     Path(id): Path<String>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-) -> Result<Json<Vec<LoggedRequest>>, String> {
-    info!(%id, %addr, "Inspecting bin");
-    validate_uuid(&id)?;
+) -> Result<impl IntoResponse, impl IntoResponse> {
+    validate_uuid(&id).map_err(|e| (StatusCode::BAD_REQUEST, e).into_response())?;
 
     let rows = sqlx::query_as::<_, LoggedRequest>(
         r#"
@@ -134,13 +123,10 @@ pub async fn inspect_bin(
     .await;
 
     match rows {
-        Ok(data) => {
-            info!(%id, %addr, count = data.len(), "Successfully fetched logged requests");
-            Ok(Json(data))
-        }
+        Ok(data) => Ok(Json(data)),
         Err(err) => {
             error!(%id, %addr, %err, "Failed to fetch logged requests");
-            Err("Failed to fetch logged requests".to_string())
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "Failed to fetch logged requests").into_response())
         }
     }
 }
@@ -148,26 +134,27 @@ pub async fn inspect_bin(
 pub async fn get_bin_expiration(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<String, String> {
-    validate_uuid(&id)?;
+) -> Result<impl IntoResponse, impl IntoResponse> {
+    validate_uuid(&id).map_err(|e| (StatusCode::BAD_REQUEST, e).into_response())?;
+
     let result = sqlx::query_scalar!("SELECT last_updated FROM bins WHERE id = ?", id)
         .fetch_optional(&state.db)
         .await
         .map_err(|err| {
-            error!(%id, %err, "Failed to fetch bin expiration");
-            "Bin not found".to_string()
+            error!(%id, %err, "DB error fetching expiration");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to fetch expiration").into_response()
         })?;
 
-        let Some(bin_record) = result else {
-            return Err("Bin not found".to_string());
-        };
+    let Some(bin_record) = result else {
+        return Err((StatusCode::NOT_FOUND, "Bin not found").into_response());
+    };
 
-        let Some(last_updated) = bin_record else {
-            return Err("Bin didnt have a last_updated field".to_string());
-        };
+    let Some(last_updated) = bin_record else {
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "Missing last_updated field").into_response());
+    };
 
-        Ok(last_updated)
-    }
+    Ok(last_updated)
+}
 
 pub async fn ping(Query(query): Query<PingQuery>) -> Json<PingResponse> {
     let message = query.message.unwrap_or_else(|| "pong".to_string());

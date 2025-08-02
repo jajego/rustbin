@@ -2,9 +2,10 @@ use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct LoggedRequest {
+   pub request_id: String,
    pub method: String,
-   pub headers: Option<String>, // ← changed to Option<String>
-   pub body: String,
+   pub headers: String,
+   pub body: Option<String>,
    pub timestamp: String,
 }
 

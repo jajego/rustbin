@@ -62,7 +62,7 @@ pub async fn log_request(
     Path(id): Path<String>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request<Body>,
-) -> String {
+) -> Result<String, String> {
     let (parts, body) = req.into_parts();
 
     let method = parts.method;
@@ -93,11 +93,11 @@ pub async fn log_request(
         Ok(_) => {
             info!(%id, %addr, %method, headers = %headers_json, body = %body_str, "Request logged");
             update_last_updated(&state, &id).await.ok();
-            "Request logged".to_string()
+            Ok("Request logged".to_string())
         },
         Err(err) => {
             error!(%id, %addr, %err, "DB error");
-            "Bin not found or error logging request".to_string()
+            Err("Bin not found or error logging request".to_string())
         }
     }
 }
@@ -140,23 +140,25 @@ pub async fn inspect_bin(
 pub async fn get_bin_expiration(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> String {
-    let row = sqlx::query("SELECT last_updated FROM bins WHERE id = ?")
-        .bind(&id)
-        .fetch_one(&state.db)
-        .await;
-
-    match row {
-        Ok(row) => {
-            let last_updated: String = row.get("last_updated");
-            format!("Bin {} was last updated at {}", id, last_updated)
-        }
-        Err(err) => {
+) -> Result<String, String> {
+    let result = sqlx::query_scalar!("SELECT last_updated FROM bins WHERE id = ?", id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|err| {
             error!(%id, %err, "Failed to fetch bin expiration");
             "Bin not found".to_string()
-        }
+        })?;
+
+        let Some(bin_record) = result else {
+            return Err("Bin not found".to_string());
+        };
+
+        let Some(last_updated) = bin_record else {
+            return Err("Bin didnt have a last_updated field".to_string());
+        };
+
+        Ok(last_updated)
     }
-}
 
 pub async fn ping(Query(query): Query<PingQuery>) -> Json<PingResponse> {
     let message = query.message.unwrap_or_else(|| "pong".to_string());

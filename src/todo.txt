@@ -4,7 +4,7 @@ housekeeping
 - do not expire active connections
 - uuid parsing
 - offer in memory option (As opposed to default sqlite)
-- when using sqlite option, prevent a user from viewing another users' bins
+- when using sqlite option, prevent a user from viewing another users' bins. this might just look like providing an optional code-protected bucket rather than any jwt auth
 - rate limiting
 
 endpoints

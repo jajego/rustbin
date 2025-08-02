@@ -1,3 +1,4 @@
+housekeeping
 - limit size of headers
 - limit # per bin
 - do not expire active connections
@@ -6,6 +7,9 @@
 - offer in memory option (As opposed to default sqlite)
 - when using sqlite option, prevent a user from viewing another users' bins
 - rate limiting
+
+endpoints
+- /bin/:id/delete
 
 bugs
 - app hangs when provided TRAILER header

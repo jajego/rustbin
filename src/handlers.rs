@@ -1,30 +1,30 @@
 use axum::{
     body::Body,
     extract::{Path, State, Query, ConnectInfo},
-    http::{Request},
+    http::{Request, StatusCode},
+    response::IntoResponse,
     Json,
 };
 use chrono::Utc;
 use http_body_util::BodyExt;
 use sqlx::query;
-use sqlx::Row;
 use std::{collections::HashMap, net::SocketAddr};
 use tracing::{info, error};
 use uuid::Uuid;
 
 use crate::{
-    models::{LoggedRequest, PingQuery, PingResponse},
+    models::{LoggedRequest, BinResponse, PingQuery, PingResponse},
     state::AppState,
 };
 
 pub async fn create_bin(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-) -> Json<HashMap<&'static str, String>> {
+) -> Result<impl IntoResponse, impl IntoResponse> {
     let id = Uuid::new_v4().to_string();
-    info!(%id, %addr, "Creating new bin");
-
     let now = Utc::now().to_rfc3339();
+
+    info!(%id, %addr, "Creating new bin");
 
     let result = query("INSERT INTO bins (id, last_updated) VALUES (?, ?)")
         .bind(&id)
@@ -35,11 +35,11 @@ pub async fn create_bin(
     match result {
         Ok(_) => {
             info!(%id, %addr, "Successfully created bin");
-            Json(HashMap::from([("bin_id", id)]))
+            Ok(Json(BinResponse { bin_id: id }))
         }
         Err(err) => {
             error!(%id, %addr, %err, "Failed to create bin");
-            panic!("Failed to insert bin");
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "Failed to insert bin"))
         }
     }
 }

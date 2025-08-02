@@ -9,6 +9,11 @@ pub struct LoggedRequest {
 }
 
 #[derive(Serialize)]
+pub struct BinResponse {
+    pub bin_id: String,
+}
+
+#[derive(Serialize)]
 pub struct PingResponse {
     pub ok: bool,
     pub message: String,

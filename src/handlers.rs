@@ -21,6 +21,7 @@ pub async fn create_bin(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
+    println!("Creating new bin at {}", addr);
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
 
@@ -79,11 +80,12 @@ pub async fn log_request(
     ).unwrap();
 
     let result = query(
-        "INSERT INTO requests (bin_id, method, headers, body, timestamp) VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO requests (bin_id, request_id, method, headers, body, timestamp) VALUES (?, ?, ?, ?, ?, ?)"
     )
     .bind(&id)
+    .bind(Uuid::new_v4())
     .bind(method.to_string())
-    .bind(headers_json.clone()) // Clone for easy use in info! below
+    .bind(headers_json.clone())
     .bind(body_str.clone())
     .bind(Utc::now().to_rfc3339())
     .execute(&state.db)

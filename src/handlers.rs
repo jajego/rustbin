@@ -1,3 +1,5 @@
+// mod utils;
+
 use axum::{
     body::Body,
     extract::{Path, State, Query, ConnectInfo},
@@ -16,6 +18,7 @@ use crate::{
     models::{LoggedRequest, BinResponse, PingQuery, PingResponse},
     state::AppState,
 };
+use crate::utils::uuid::validate_uuid;
 
 pub async fn create_bin(
     State(state): State<AppState>,
@@ -64,6 +67,8 @@ pub async fn log_request(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request<Body>,
 ) -> Result<String, String> {
+    validate_uuid(&id)?;
+
     let (parts, body) = req.into_parts();
 
     let method = parts.method;
@@ -110,6 +115,7 @@ pub async fn inspect_bin(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> Result<Json<Vec<LoggedRequest>>, String> {
     info!(%id, %addr, "Inspecting bin");
+    validate_uuid(&id)?;
 
     let rows = sqlx::query_as::<_, LoggedRequest>(
         r#"
@@ -143,6 +149,7 @@ pub async fn get_bin_expiration(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<String, String> {
+    validate_uuid(&id)?;
     let result = sqlx::query_scalar!("SELECT last_updated FROM bins WHERE id = ?", id)
         .fetch_optional(&state.db)
         .await

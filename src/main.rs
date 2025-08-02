@@ -3,6 +3,7 @@ mod state;
 mod models;
 mod tasks;
 mod routes;
+mod utils;
 
 use axum::http::Method;
 use std::net::SocketAddr;

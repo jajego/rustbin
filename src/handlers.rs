@@ -51,7 +51,7 @@ async fn update_last_updated(state: &AppState, id: &str) -> Result<(), sqlx::Err
         .await?;
     Ok(())
 }
-
+    
 pub async fn log_request(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -154,6 +154,54 @@ pub async fn get_bin_expiration(
     };
 
     Ok(last_updated)
+}
+
+pub async fn delete_bin(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, impl IntoResponse> {
+    validate_uuid(&id).map_err(|e| (StatusCode::BAD_REQUEST, e).into_response())?;
+
+    let result = query("DELETE FROM bins WHERE id = ?").bind(&id)
+    .execute(&state.db)
+    .await;
+
+    match result {
+        Ok(_) => {
+            info!(%id, %addr, "Bin deleted");
+            update_last_updated(&state, &id).await.ok();
+            Ok("Bin deleted".to_string())
+        },
+        Err(err) => {
+            error!(%id, %addr,  %err, "DB error");
+            Err((StatusCode::NOT_FOUND, "Bin not found or error deleting Bin").into_response())     
+        }
+    }
+}
+
+pub async fn delete_request(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, impl IntoResponse> {
+    validate_uuid(&id).map_err(|e| (StatusCode::BAD_REQUEST, e).into_response())?;
+
+    let result = query("DELETE FROM requests WHERE request_id = ?").bind(&id)
+    .execute(&state.db)
+    .await;
+
+    match result {
+        Ok(_) => {
+            info!(%id, %addr, "Request deleted");
+            update_last_updated(&state, &id).await.ok();
+            Ok("Request deleted".to_string())
+        },
+        Err(err) => {
+            error!(%id, %addr,  %err, "DB error");
+            Err((StatusCode::NOT_FOUND, "Request not found or error deleting request").into_response())     
+        }
+    }
 }
 
 pub async fn ping(Query(query): Query<PingQuery>) -> Json<PingResponse> {

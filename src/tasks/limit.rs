@@ -5,6 +5,7 @@ use tower_governor::key_extractor::PeerIpKeyExtractor;
 use governor::middleware::NoOpMiddleware;
 use governor::clock::QuantaInstant;
 
+// Prevent unbounded memory growth, and evict stale IPs.
 pub async fn start_rate_limit_cleanup(conf: &Arc<GovernorConfig<PeerIpKeyExtractor, NoOpMiddleware<QuantaInstant>>>) {
    let governor_limiter = conf.limiter().clone();
    let interval = Duration::from_secs(60);

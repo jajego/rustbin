@@ -220,11 +220,11 @@ mod tests {
             .await
             .unwrap();
 
-        sqlx::query("CREATE TABLE bins (id TEXT PRIMARY KEY, last_updated TEXT NOT NULL);")
+        sqlx::query("CREATE TABLE bins (id TEXT UNIQUE PRIMARY KEY, last_updated TEXT NOT NULL);")
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE requests (id INTEGER PRIMARY KEY AUTOINCREMENT, bin_id TEXT, request_id TEXT, method TEXT, headers TEXT, body TEXT, timestamp TEXT);")
+        sqlx::query("CREATE TABLE requests (id INTEGER PRIMARY KEY AUTOINCREMENT, bin_id TEXT, request_id TEXT UNIQUE NOT NULL, method TEXT, headers TEXT, body TEXT, timestamp TEXT);")
             .execute(&pool)
             .await
             .unwrap();
@@ -233,7 +233,7 @@ mod tests {
     }
 
     fn test_addr() -> SocketAddr {
-        SocketAddr::from(([127, 0, 0, 1], 8080))
+        SocketAddr::from(([0, 0, 0, 0], 8080))
     }
 
     async fn response_json<T: for<'de> serde::Deserialize<'de>>(resp: impl IntoResponse) -> T {

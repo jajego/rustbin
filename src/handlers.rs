@@ -181,7 +181,7 @@ pub async fn delete_request(
 ) -> Result<impl IntoResponse, impl IntoResponse> {
     let uuid = validate_uuid(&id).map_err(|e| (StatusCode::BAD_REQUEST, e).into_response())?;
 
-    let result = query("DELETE FROM requests WHERE request_id = ?").bind(uuid)
+    let result = query("DELETE FROM requests WHERE request_id = ?").bind(uuid.to_string())
     .execute(&state.db)
     .await;
 

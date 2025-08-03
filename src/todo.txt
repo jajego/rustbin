@@ -6,7 +6,7 @@ housekeeping
 - when using sqlite option, prevent a user from viewing another users' bins. this might just look like providing an optional code-protected bucket rather than any jwt auth
 
 endpoints
-- /bin/:id/delete
+-
 
 bugs
 - app hangs when provided TRAILER header

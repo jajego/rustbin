@@ -1,12 +1,12 @@
 use serde::{Serialize, Deserialize};
-
+use uuid::Uuid;
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct LoggedRequest {
-   pub request_id: String,
    pub method: String,
    pub headers: String,
    pub body: Option<String>,
    pub timestamp: String,
+   pub request_id: Uuid,
 }
 
 #[derive(Serialize)]

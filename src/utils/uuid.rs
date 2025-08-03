@@ -1,7 +1,7 @@
 use uuid::Uuid;
 
-pub fn validate_uuid(id: &str) -> Result<(), String> {
-    Uuid::parse_str(id).map(|_| ()).map_err(|_| "Invalid bin ID format".to_string())
+pub fn validate_uuid(id: &str) -> Result<Uuid, String> {
+    Uuid::parse_str(id).map_err(|_| "Invalid UUID format".to_string())
 }
 
 #[cfg(test)]

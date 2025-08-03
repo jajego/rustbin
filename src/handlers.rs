@@ -22,7 +22,7 @@ pub async fn create_bin(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-    let id = Uuid::new_v4().to_string();
+    let id = Uuid::new_v4();
     let now = Utc::now().to_rfc3339();
 
     info!(%id, %addr, "Creating new bin");
@@ -34,7 +34,7 @@ pub async fn create_bin(
         .await;
 
     match result {
-        Ok(_) => Ok(Json(BinResponse { bin_id: id })),
+        Ok(_) => Ok(Json(BinResponse { bin_id: id.to_string() })),
         Err(err) => {
             error!(%id, %addr, %err, "Failed to create bin");
             Err((StatusCode::INTERNAL_SERVER_ERROR, "Failed to insert bin").into_response())
@@ -106,13 +106,17 @@ pub async fn inspect_bin(
 ) -> Result<impl IntoResponse, impl IntoResponse> {
     validate_uuid(&id).map_err(|e| (StatusCode::BAD_REQUEST, e).into_response())?;
 
+    println!("===============================================");
+    println!("Finna get these rows");
+
     let rows = sqlx::query_as::<_, LoggedRequest>(
         r#"
         SELECT 
             method, 
             headers, 
             body, 
-            timestamp
+            timestamp,
+            request_id
         FROM requests
         WHERE bin_id = ?
         ORDER BY id
@@ -121,6 +125,8 @@ pub async fn inspect_bin(
     .bind(&id)
     .fetch_all(&state.db)
     .await;
+
+    print!("Hiii! {:?}", rows);
 
     match rows {
         Ok(data) => Ok(Json(data)),
@@ -161,14 +167,17 @@ pub async fn delete_bin(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-    validate_uuid(&id).map_err(|e| (StatusCode::BAD_REQUEST, e).into_response())?;
+    let uuid = validate_uuid(&id).map_err(|e| (StatusCode::BAD_REQUEST, e).into_response())?;
 
-    let result = query("DELETE FROM bins WHERE id = ?").bind(&id)
+    let result = query("DELETE FROM bins WHERE id = ?").bind(uuid)
     .execute(&state.db)
     .await;
 
     match result {
-        Ok(_) => {
+        Ok(res) => {
+            if res.rows_affected() == 0 {
+                return Err((StatusCode::NOT_FOUND, "Bin not found").into_response());
+            }
             info!(%id, %addr, "Bin deleted");
             update_last_updated(&state, &id).await.ok();
             Ok("Bin deleted".to_string())
@@ -185,14 +194,19 @@ pub async fn delete_request(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-    validate_uuid(&id).map_err(|e| (StatusCode::BAD_REQUEST, e).into_response())?;
+    let uuid = validate_uuid(&id).map_err(|e| (StatusCode::BAD_REQUEST, e).into_response())?;
 
-    let result = query("DELETE FROM requests WHERE request_id = ?").bind(&id)
+    let result = query("DELETE FROM requests WHERE request_id = ?").bind(uuid)
     .execute(&state.db)
     .await;
 
+    print!("Result is {:?}", result);
+
     match result {
-        Ok(_) => {
+        Ok(res) => {
+            if res.rows_affected() == 0 {
+                return Err((StatusCode::NOT_FOUND, "Request not found").into_response());
+            }
             info!(%id, %addr, "Request deleted");
             update_last_updated(&state, &id).await.ok();
             Ok("Request deleted".to_string())

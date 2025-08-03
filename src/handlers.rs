@@ -233,7 +233,7 @@ mod tests {
     }
 
     fn test_addr() -> SocketAddr {
-        SocketAddr::from(([0, 0, 0, 0], 8080))
+        SocketAddr::from(([127, 0, 0, 1], 8080))
     }
 
     async fn response_json<T: for<'de> serde::Deserialize<'de>>(resp: impl IntoResponse) -> T {

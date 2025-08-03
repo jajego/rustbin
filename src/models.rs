@@ -9,12 +9,12 @@ pub struct LoggedRequest {
    pub request_id: Uuid,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct BinResponse {
     pub bin_id: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct PingResponse {
     pub ok: bool,
     pub message: String,

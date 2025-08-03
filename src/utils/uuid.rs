@@ -18,6 +18,6 @@ mod tests {
     fn invalid_uuid_returns_err() {
         let result = validate_uuid("not-a-uuid");
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Invalid bin ID format");
+        assert_eq!(result.unwrap_err(), "Invalid UUID format");
     }
 }

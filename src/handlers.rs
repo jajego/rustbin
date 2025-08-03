@@ -106,9 +106,6 @@ pub async fn inspect_bin(
 ) -> Result<impl IntoResponse, impl IntoResponse> {
     validate_uuid(&id).map_err(|e| (StatusCode::BAD_REQUEST, e).into_response())?;
 
-    println!("===============================================");
-    println!("Finna get these rows");
-
     let rows = sqlx::query_as::<_, LoggedRequest>(
         r#"
         SELECT 
@@ -135,31 +132,6 @@ pub async fn inspect_bin(
             Err((StatusCode::INTERNAL_SERVER_ERROR, "Failed to fetch logged requests").into_response())
         }
     }
-}
-
-pub async fn get_bin_expiration(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<impl IntoResponse, impl IntoResponse> {
-    validate_uuid(&id).map_err(|e| (StatusCode::BAD_REQUEST, e).into_response())?;
-
-    let result = sqlx::query_scalar!("SELECT last_updated FROM bins WHERE id = ?", id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|err| {
-            error!(%id, %err, "DB error fetching expiration");
-            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to fetch expiration").into_response()
-        })?;
-
-    let Some(bin_record) = result else {
-        return Err((StatusCode::NOT_FOUND, "Bin not found").into_response());
-    };
-
-    let Some(last_updated) = bin_record else {
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, "Missing last_updated field").into_response());
-    };
-
-    Ok(last_updated)
 }
 
 pub async fn delete_bin(
@@ -225,4 +197,213 @@ pub async fn ping(Query(query): Query<PingQuery>) -> Json<PingResponse> {
         ok: true,
         message,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        extract::{State, ConnectInfo, Path, Query},
+        http::{Request, Method},
+        body::Body,
+    };
+    use std::net::SocketAddr;
+    use sqlx::sqlite::SqlitePoolOptions;
+    use uuid::Uuid;
+    use serde_json::{from_slice};
+    use http_body_util::BodyExt;
+
+    async fn setup_test_db() -> AppState {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(":memory:")
+            .await
+            .unwrap();
+
+        sqlx::query("CREATE TABLE bins (id TEXT PRIMARY KEY, last_updated TEXT NOT NULL);")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE requests (id INTEGER PRIMARY KEY AUTOINCREMENT, bin_id TEXT, request_id TEXT, method TEXT, headers TEXT, body TEXT, timestamp TEXT);")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        AppState { db: pool }
+    }
+
+    fn test_addr() -> SocketAddr {
+        SocketAddr::from(([127, 0, 0, 1], 8080))
+    }
+
+    async fn response_json<T: for<'de> serde::Deserialize<'de>>(resp: impl IntoResponse) -> T {
+        let response = resp.into_response();
+        let (_parts, body) = response.into_parts();
+        let bytes = body.collect().await.unwrap().to_bytes();
+        from_slice(&bytes).unwrap()
+    }
+
+    async fn response_string(resp: impl IntoResponse) -> String {
+        let response = resp.into_response();
+        let (_parts, body) = response.into_parts();
+        let bytes = body.collect().await.unwrap().to_bytes();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_create_bin() {
+        let state = setup_test_db().await;
+        let addr = test_addr();
+        let result = create_bin(State(state), ConnectInfo(addr)).await;
+        assert!(result.is_ok());
+        let resp = result.ok().unwrap();
+        let bin_response: BinResponse = response_json(resp).await;
+        assert!(Uuid::parse_str(&bin_response.bin_id).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_log_request_and_inspect_bin() {
+        let state = setup_test_db().await;
+        let addr = test_addr();
+        // Create a bin first
+        let bin_id = {
+            let result = create_bin(State(state.clone()), ConnectInfo(addr)).await;
+            assert!(result.is_ok());
+            let resp = result.ok().unwrap();
+            let bin_response: BinResponse = response_json(resp).await;
+            bin_response.bin_id
+        };
+        // Log a request
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/")
+            .header("x-test", "true")
+            .body(Body::from("test body"))
+            .unwrap();
+        let log_result = log_request(
+            State(state.clone()),
+            Path(bin_id.clone()),
+            ConnectInfo(addr),
+            req,
+        )
+        .await;
+        assert!(log_result.is_ok());
+        // Inspect bin
+        let result = inspect_bin(
+            State(state.clone()),
+            Path(bin_id.clone()),
+            ConnectInfo(addr),
+        )
+        .await;
+        assert!(result.is_ok());
+        let resp = result.ok().unwrap();
+        let requests: Vec<LoggedRequest> = response_json(resp).await;
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "POST");
+        assert_eq!(requests[0].body.as_deref(), Some("test body"));
+    }
+
+    #[tokio::test]
+    async fn test_delete_bin() {
+        let state = setup_test_db().await;
+        let addr = test_addr();
+        let bin_id = {
+            let result = create_bin(State(state.clone()), ConnectInfo(addr)).await;
+            assert!(result.is_ok());
+            let resp = result.ok().unwrap();
+            let bin_response: BinResponse = response_json(resp).await;
+            bin_response.bin_id
+        };
+        // Delete the bin
+        let result = delete_bin(
+            State(state.clone()),
+            ConnectInfo(addr),
+            Path(bin_id.clone()),
+        )
+        .await;
+        assert!(result.is_ok());
+        let resp = result.ok().unwrap();
+        let msg = response_string(resp).await;
+        assert_eq!(msg, "Bin deleted");
+        // Try deleting again, should be not found
+        let result = delete_bin(
+            State(state.clone()),
+            ConnectInfo(addr),
+            Path(bin_id.clone()),
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_delete_request() {
+        let state = setup_test_db().await;
+        let addr = test_addr();
+        let bin_id = {
+            let result = create_bin(State(state.clone()), ConnectInfo(addr)).await;
+            assert!(result.is_ok());
+            let resp = result.ok().unwrap();
+            let bin_response: BinResponse = response_json(resp).await;
+            bin_response.bin_id
+        };
+        // Log a request
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/")
+            .header("x-test", "true")
+            .body(Body::from("test body"))
+            .unwrap();
+        let log_result = log_request(
+            State(state.clone()),
+            Path(bin_id.clone()),
+            ConnectInfo(addr),
+            req,
+        )
+        .await;
+        assert!(log_result.is_ok());
+        // Get the request_id
+        let result = inspect_bin(
+            State(state.clone()),
+            Path(bin_id.clone()),
+            ConnectInfo(addr),
+        )
+        .await;
+        assert!(result.is_ok());
+        let resp = result.ok().unwrap();
+        let requests: Vec<LoggedRequest> = response_json(resp).await;
+        let request_id = requests[0].request_id.to_string();
+        // Delete the request
+        let result = delete_request(
+            State(state.clone()),
+            ConnectInfo(addr),
+            Path(request_id.clone()),
+        )
+        .await;
+        assert!(result.is_ok());
+        let resp = result.ok().unwrap();
+        let msg = response_string(resp).await;
+        assert_eq!(msg, "Request deleted");
+        // Try deleting again, should be not found
+        let result = delete_request(
+            State(state.clone()),
+            ConnectInfo(addr),
+            Path(request_id.clone()),
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_ping() {
+        let query = PingQuery { message: Some("hello".to_string()) };
+        let resp = ping(Query(query)).await;
+        let axum::Json(resp) = resp;
+        assert!(resp.ok);
+        assert_eq!(resp.message, "hello");
+        let query = PingQuery { message: None };
+        let resp = ping(Query(query)).await;
+        let axum::Json(resp) = resp;
+        assert!(resp.ok);
+        assert_eq!(resp.message, "pong");
+    }
 }

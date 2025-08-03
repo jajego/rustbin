@@ -10,5 +10,7 @@ pub fn bin_routes(app_state: AppState) -> Router {
         .route("/bin/:id", any(handlers::log_request))
         .route("/bin/:id/inspect", get(handlers::inspect_bin))
         .route("/bin/:id/expiry", get(handlers::get_bin_expiration))
+        .route("/bin/:id/delete", post(handlers::delete_bin))
+        .route("/bin/request/:id/delete", post(handlers::delete_request))
         .with_state(app_state)
 }

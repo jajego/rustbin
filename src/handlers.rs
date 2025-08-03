@@ -22,7 +22,7 @@ pub async fn create_bin(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-    let id = Uuid::new_v4();
+    let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
 
     info!(%id, %addr, "Creating new bin");
@@ -66,6 +66,7 @@ pub async fn log_request(
 
     let body_bytes = body.collect().await.unwrap().to_bytes();
     let body_str = String::from_utf8_lossy(&body_bytes).to_string();
+    let request_id = Uuid::new_v4();
 
     let headers_json = serde_json::to_string(
         &headers
@@ -78,7 +79,7 @@ pub async fn log_request(
         "INSERT INTO requests (bin_id, request_id, method, headers, body, timestamp) VALUES (?, ?, ?, ?, ?, ?)"
     )
     .bind(&id)
-    .bind(Uuid::new_v4())
+    .bind(&request_id)
     .bind(method.to_string())
     .bind(headers_json.clone())
     .bind(body_str.clone())
@@ -90,6 +91,18 @@ pub async fn log_request(
         Ok(_) => {
             info!(%id, %addr, %method, headers = %headers_json, body = %body_str, "Request logged");
             update_last_updated(&state, &id).await.ok();
+
+            if let Some(sender) = state.bin_channels.get(&id) {
+                let payload = serde_json::json!({
+                    "method": method.to_string(),
+                    "headers": headers_json,
+                    "body": body_str,
+                    "timestamp": Utc::now().to_rfc3339(),
+                    "request_id": request_id,
+                });
+                let _ = sender.send(payload.to_string());
+            }
+
             Ok("Request logged".to_string())
         },
         Err(err) => {
@@ -141,7 +154,7 @@ pub async fn delete_bin(
 ) -> Result<impl IntoResponse, impl IntoResponse> {
     let uuid = validate_uuid(&id).map_err(|e| (StatusCode::BAD_REQUEST, e).into_response())?;
 
-    let result = query("DELETE FROM bins WHERE id = ?").bind(uuid)
+    let result = query("DELETE FROM bins WHERE id = ?").bind(uuid.to_string())
     .execute(&state.db)
     .await;
 
@@ -213,7 +226,7 @@ mod tests {
     use serde_json::{from_slice};
     use http_body_util::BodyExt;
 
-    async fn setup_test_db() -> AppState {
+    pub async fn setup_test_db() -> AppState {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect(":memory:")
@@ -224,16 +237,28 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE requests (id INTEGER PRIMARY KEY AUTOINCREMENT, bin_id TEXT, request_id TEXT UNIQUE NOT NULL, method TEXT, headers TEXT, body TEXT, timestamp TEXT);")
-            .execute(&pool)
-            .await
-            .unwrap();
 
-        AppState { db: pool }
+        sqlx::query("CREATE TABLE requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bin_id TEXT,
+            request_id TEXT UNIQUE NOT NULL,
+            method TEXT,
+            headers TEXT,
+            body TEXT,
+            timestamp TEXT
+        );")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        AppState {
+            db: pool,
+            bin_channels: std::sync::Arc::new(dashmap::DashMap::new()),
+        }
     }
 
     fn test_addr() -> SocketAddr {
-        SocketAddr::from(([127, 0, 0, 1], 8080))
+        SocketAddr::from(([0, 0, 0, 0], 8080))
     }
 
     async fn response_json<T: for<'de> serde::Deserialize<'de>>(resp: impl IntoResponse) -> T {

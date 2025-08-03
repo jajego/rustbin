@@ -4,6 +4,7 @@ mod models;
 mod tasks;
 mod routes;
 mod utils;
+mod websocket;
 
 use axum::http::Method;
 use std::net::SocketAddr;

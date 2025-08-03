@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS bins (
-    id TEXT PRIMARY KEY,
+    id TEXT UNIQUE PRIMARY KEY,
     last_updated TEXT
 );
 

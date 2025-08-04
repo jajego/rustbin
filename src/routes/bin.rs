@@ -1,5 +1,5 @@
 use axum::{
-    routing::{get, post, delete, any},
+    routing::{get, post, delete, any, options},
     Router,
 };
 use crate::{handlers, state::AppState};
@@ -8,7 +8,8 @@ use crate::websocket::ws_handler;
 pub fn bin_routes(app_state: AppState) -> Router {
     Router::new()
         .route("/create", post(handlers::create_bin))
-        .route("/bin/:id", any(handlers::log_request))
+        .route("/bin/:id", options(handlers::log_request))  // Explicit OPTIONS handler
+        .route("/bin/:id", any(handlers::log_request))      // All other methods
         .route("/bin/:id/ws", get(ws_handler))
         .route("/bin/:id/inspect", get(handlers::inspect_bin))
         .route("/delete/:id", delete(handlers::delete_bin))

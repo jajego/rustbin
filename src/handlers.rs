@@ -1,8 +1,8 @@
 use axum::{
     body::Body,
     extract::{ConnectInfo, Path, Query, State},
-    http::{Request, StatusCode},
-    response::{IntoResponse},
+    http::{header, HeaderValue, Request, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
 use chrono::Utc;
@@ -20,8 +20,8 @@ use crate::utils::uuid::validate_uuid;
 
 // Abuse prevention constants
 const MAX_REQUESTS_PER_BIN: i64 = 100;
-const MAX_HEADERS_SIZE: usize = 1024 * 1024; // 1MB
-const MAX_BODY_SIZE: usize = 1024 * 1024; // 1MB
+pub const MAX_HEADERS_SIZE: usize = 1024 * 1024; // 1MB
+pub const MAX_BODY_SIZE: usize = 1024 * 1024; // 1MB
 
 // Common error response helpers
 fn internal_error(message: String) -> (StatusCode, String) {
@@ -147,6 +147,37 @@ async fn send_websocket_notification(state: &AppState, bin_id: &str, request_dat
     }
 }
 
+// Helper function to add CORS headers to any response
+fn add_cors_headers(mut response: Response) -> Response {
+    let headers = response.headers_mut();
+    
+    // Allow all origins
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    
+    // Allow all methods
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS"),
+    );
+    
+    // Allow all headers
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static("*"),
+    );
+    
+    // Cache preflight for 1 day
+    headers.insert(
+        header::ACCESS_CONTROL_MAX_AGE,
+        HeaderValue::from_static("86400"),
+    );
+    
+    response
+}
+
 pub async fn create_bin(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -163,10 +194,14 @@ pub async fn create_bin(
         .await;
 
     match result {
-        Ok(_) => Ok(Json(BinResponse { bin_id: id.to_string() })),
+        Ok(_) => {
+            let response = Json(BinResponse { bin_id: id.to_string() }).into_response();
+            Ok(add_cors_headers(response))
+        },
         Err(err) => {
             error!(%id, %addr, %err, "Failed to create bin");
-            Err((StatusCode::INTERNAL_SERVER_ERROR, "Failed to insert bin").into_response())
+            let response = (StatusCode::INTERNAL_SERVER_ERROR, "Failed to insert bin").into_response();
+            Err(add_cors_headers(response))
         }
     }
 }
@@ -207,13 +242,13 @@ pub async fn log_request(
     req: Request<Body>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
     // Validate input
-    validate_bin_id(&id).map_err(|e| e.into_response())?;
+    validate_bin_id(&id).map_err(|e| add_cors_headers(e.into_response()))?;
     
     // Check if bin exists
-    check_bin_exists(&state, &id).await.map_err(|e| e.into_response())?;
+    check_bin_exists(&state, &id).await.map_err(|e| add_cors_headers(e.into_response()))?;
     
     // Process request data (headers, body, validation)
-    let request_data = process_request_data(req, &id, &addr).await.map_err(|e| e.into_response())?;
+    let request_data = process_request_data(req, &id, &addr).await.map_err(|e| add_cors_headers(e.into_response()))?;
     
     // Store request in database
     match store_request_in_db(&state, &id, &request_data).await {
@@ -233,11 +268,14 @@ pub async fn log_request(
             // Send websocket notification
             send_websocket_notification(&state, &id, &request_data).await;
             
-            Ok("Request logged".to_string())
+            // Return response with CORS headers
+            let response = "Request logged".to_string().into_response();
+            Ok(add_cors_headers(response))
         },
         Err(err) => {
             error!(%id, %addr, %err, "DB error");
-            Err((StatusCode::NOT_FOUND, "Bin not found or error logging request").into_response())
+            let response = (StatusCode::NOT_FOUND, "Bin not found or error logging request").into_response();
+            Err(add_cors_headers(response))
         }
     }
 }
@@ -248,8 +286,8 @@ pub async fn inspect_bin(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
     // Validate input and check bin existence
-    validate_bin_id(&id).map_err(|e| e.into_response())?;
-    check_bin_exists(&state, &id).await.map_err(|e| e.into_response())?;
+    validate_bin_id(&id).map_err(|e| add_cors_headers(e.into_response()))?;
+    check_bin_exists(&state, &id).await.map_err(|e| add_cors_headers(e.into_response()))?;
 
     // Fetch the requests for this bin
     let rows = sqlx::query_as::<_, LoggedRequest>(
@@ -272,11 +310,13 @@ pub async fn inspect_bin(
     match rows {
         Ok(data) => {
             info!(%id, %addr, request_count = data.len(), "Successfully fetched bin requests");
-            Ok(Json(data))
+            let response = Json(data).into_response();
+            Ok(add_cors_headers(response))
         },
         Err(err) => {
             error!(%id, %addr, %err, "Failed to fetch logged requests");
-            Err((StatusCode::INTERNAL_SERVER_ERROR, "Failed to fetch logged requests").into_response())
+            let response = (StatusCode::INTERNAL_SERVER_ERROR, "Failed to fetch logged requests").into_response();
+            Err(add_cors_headers(response))
         }
     }
 }
@@ -286,7 +326,7 @@ pub async fn delete_bin(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-    let uuid = validate_bin_id(&id).map_err(|e| e.into_response())?;
+    let uuid = validate_bin_id(&id).map_err(|e| add_cors_headers(e.into_response()))?;
 
     let result = query("DELETE FROM bins WHERE id = ?")
         .bind(uuid.to_string())
@@ -296,15 +336,18 @@ pub async fn delete_bin(
     match result {
         Ok(res) => {
             if res.rows_affected() == 0 {
-                return Err((StatusCode::NOT_FOUND, "Bin not found").into_response());
+                let response = (StatusCode::NOT_FOUND, "Bin not found").into_response();
+                return Err(add_cors_headers(response));
             }
             info!(%id, %addr, "Bin deleted");
             update_last_updated(&state, &id).await.ok();
-            Ok("Bin deleted".to_string())
+            let response = "Bin deleted".to_string().into_response();
+            Ok(add_cors_headers(response))
         },
         Err(err) => {
             error!(%id, %addr, %err, "DB error");
-            Err((StatusCode::NOT_FOUND, "Bin not found or error deleting Bin").into_response())     
+            let response = (StatusCode::NOT_FOUND, "Bin not found or error deleting Bin").into_response();
+            Err(add_cors_headers(response))     
         }
     }
 }
@@ -314,7 +357,7 @@ pub async fn delete_request(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-    let uuid = validate_bin_id(&id).map_err(|e| e.into_response())?;
+    let uuid = validate_bin_id(&id).map_err(|e| add_cors_headers(e.into_response()))?;
 
     let result = query("DELETE FROM requests WHERE request_id = ?")
         .bind(uuid)
@@ -324,26 +367,31 @@ pub async fn delete_request(
     match result {
         Ok(res) => {
             if res.rows_affected() == 0 {
-                return Err((StatusCode::NOT_FOUND, "Request not found").into_response());
+                let response = (StatusCode::NOT_FOUND, "Request not found").into_response();
+                return Err(add_cors_headers(response));
             }
             info!(%id, %addr, "Request deleted");
             update_last_updated(&state, &id).await.ok();
-            Ok("Request deleted".to_string())
+            let response = "Request deleted".to_string().into_response();
+            Ok(add_cors_headers(response))
         },
         Err(err) => {
             error!(%id, %addr, %err, "DB error");
-            Err((StatusCode::NOT_FOUND, "Request not found or error deleting request").into_response())     
+            let response = (StatusCode::NOT_FOUND, "Request not found or error deleting request").into_response();
+            Err(add_cors_headers(response))     
         }
     }
 }
 
-pub async fn ping(Query(query): Query<PingQuery>) -> Json<PingResponse> {
+pub async fn ping(Query(query): Query<PingQuery>) -> impl IntoResponse {
     let message = query.message.unwrap_or_else(|| "pong".to_string());
 
-    Json(PingResponse {
+    let response = Json(PingResponse {
         ok: true,
         message,
-    })
+    }).into_response();
+    
+    add_cors_headers(response)
 }
 
 #[cfg(test)]
@@ -556,14 +604,15 @@ mod tests {
     async fn test_ping() {
         let query = PingQuery { message: Some("hello".to_string()) };
         let resp = ping(Query(query)).await;
-        let axum::Json(resp) = resp;
-        assert!(resp.ok);
-        assert_eq!(resp.message, "hello");
+        let ping_response: PingResponse = response_json(resp).await;
+        assert!(ping_response.ok);
+        assert_eq!(ping_response.message, "hello");
+        
         let query = PingQuery { message: None };
         let resp = ping(Query(query)).await;
-        let axum::Json(resp) = resp;
-        assert!(resp.ok);
-        assert_eq!(resp.message, "pong");
+        let ping_response: PingResponse = response_json(resp).await;
+        assert!(ping_response.ok);
+        assert_eq!(ping_response.message, "pong");
     }
 
     #[tokio::test]
@@ -803,6 +852,58 @@ mod tests {
         )
         .await;
         assert!(log_result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_options_request_logging() {
+        let state = setup_test_db().await;
+        let addr = test_addr();
+        
+        // Create a bin first
+        let bin_id = {
+            let result = create_bin(State(state.clone()), ConnectInfo(addr)).await;
+            assert!(result.is_ok());
+            let resp = result.ok().unwrap();
+            let bin_response: BinResponse = response_json(resp).await;
+            bin_response.bin_id
+        };
+
+        // Log an OPTIONS request
+        let req = Request::builder()
+            .method(Method::OPTIONS)
+            .uri("/")
+            .header("Access-Control-Request-Method", "POST")
+            .header("Access-Control-Request-Headers", "content-type")
+            .body(Body::from(""))
+            .unwrap();
+        
+        let log_result = log_request(
+            State(state.clone()),
+            Path(bin_id.clone()),
+            ConnectInfo(addr),
+            req,
+        )
+        .await;
+        assert!(log_result.is_ok());
+
+        // Inspect bin to verify OPTIONS request was logged
+        let result = inspect_bin(
+            State(state.clone()),
+            Path(bin_id.clone()),
+            ConnectInfo(addr),
+        )
+        .await;
+        assert!(result.is_ok());
+        let resp = result.ok().unwrap();
+        let requests: Vec<LoggedRequest> = response_json(resp).await;
+        
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "OPTIONS");
+        
+        // Verify CORS headers are captured
+        let headers: serde_json::Value = serde_json::from_str(&requests[0].headers).unwrap();
+        assert!(headers.get("access-control-request-method").is_some());
+        assert!(headers.get("access-control-request-headers").is_some());
     }
 
     #[tokio::test]

@@ -1,16 +1,14 @@
 mod handlers;
-mod state;
 mod models;
-mod tasks;
 mod routes;
+mod state;
+mod tasks;
 mod utils;
 mod websocket;
 
-use axum::http::Method;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::trace::{TraceLayer, DefaultMakeSpan, DefaultOnResponse};
-use tower_http::cors::{CorsLayer, Any};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 
@@ -35,16 +33,11 @@ async fn main() {
    );
     tasks::limit::start_rate_limit_cleanup(&governor_conf).await;
 
-    let cors = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST])
-        .allow_origin(Any);
-
     let trace = TraceLayer::new_for_http()
         .make_span_with(DefaultMakeSpan::new().include_headers(true))
         .on_response(DefaultOnResponse::new().include_headers(true));
 
     let app = routes::create_router(app_state)
-        .layer(cors)
         .layer(trace)
         .layer(GovernorLayer {
            config: governor_conf,

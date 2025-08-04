@@ -1,3 +1,4 @@
+mod config;
 mod handlers;
 mod models;
 mod routes;
@@ -9,29 +10,45 @@ mod websocket;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::trace::{TraceLayer, DefaultMakeSpan, DefaultOnResponse};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
+
+use config::RustbinConfig;
 
 #[tokio::main]
 async fn main() {
-    dotenvy::dotenv().ok();
-
+    // Load configuration (creates default config file if it doesn't exist)
+    const CONFIG_PATH: &str = "rustbin.toml";
+    if let Err(err) = RustbinConfig::create_default_config_if_missing(CONFIG_PATH) {
+        eprintln!("Failed to create default config: {}", err);
+    }
+    
+    let config = RustbinConfig::from_file_or_default(CONFIG_PATH);
+    
+    // Initialize logging with config
     tracing_subscriber::registry()
-        // .with(EnvFilter::from_default_env())
+        .with(EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new(&config.logging.filter)))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let app_state = state::AppState::new().await.expect("Failed to init DB");
-    tasks::cleanup::start_cleanup_task(app_state.db.clone(), app_state.bin_channels.clone()).await;
+    tracing::info!("Starting rustbin with configuration from {}", CONFIG_PATH);
+
+    let app_state = state::AppState::new(&config.database, &config.limits).await.expect("Failed to init DB");
+    tasks::cleanup::start_cleanup_task(
+        app_state.db.clone(), 
+        app_state.bin_channels.clone(),
+        &config.cleanup
+    ).await;
 
     let governor_conf = Arc::new(
        GovernorConfigBuilder::default()
-           .per_second(2)
-           .burst_size(5)
+           .per_second(config.rate_limiting.requests_per_second.into())
+           .burst_size(config.rate_limiting.burst_size.into())
            .finish()
            .unwrap(),
    );
-    tasks::limit::start_rate_limit_cleanup(&governor_conf).await;
+    tasks::limit::start_rate_limit_cleanup(&governor_conf, &config.rate_limiting).await;
 
     let trace = TraceLayer::new_for_http()
         .make_span_with(DefaultMakeSpan::new().include_headers(true))
@@ -43,7 +60,11 @@ async fn main() {
            config: governor_conf,
        });
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
+    let addr = SocketAddr::from((
+        config.server.host.parse::<std::net::IpAddr>()
+            .unwrap_or_else(|_| [0, 0, 0, 0].into()),
+        config.server.port
+    ));
     tracing::info!("Listening on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();

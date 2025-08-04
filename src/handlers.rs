@@ -18,9 +18,16 @@ use crate::{
 };
 use crate::utils::uuid::validate_uuid;
 
-// Abuse prevention constants
-const MAX_REQUESTS_PER_BIN: i64 = 100;
+#[cfg(test)]
+use std::sync::Arc;
+#[cfg(test)]
+use dashmap::DashMap;
+
+// Note: These constants are now configured via rustbin.toml
+// They remain here for backwards compatibility with tests
+#[cfg(test)]
 pub const MAX_HEADERS_SIZE: usize = 1024 * 1024; // 1MB
+#[cfg(test)]
 pub const MAX_BODY_SIZE: usize = 1024 * 1024; // 1MB
 
 // Common error response helpers
@@ -75,6 +82,7 @@ async fn process_request_data(
     req: Request<Body>,
     id: &str,
     addr: &SocketAddr,
+    limits: &crate::config::LimitsConfig,
 ) -> Result<ProcessedRequest, (StatusCode, String)> {
     let (parts, body) = req.into_parts();
     let method = parts.method;
@@ -84,9 +92,9 @@ async fn process_request_data(
     let body_str = String::from_utf8_lossy(&body_bytes).to_string();
     
     // Validate body size
-    if body_bytes.len() > MAX_BODY_SIZE {
-        warn!(%id, %addr, body_size = body_bytes.len(), "Request body too large, rejecting");
-        return Err(payload_too_large_error("Request body exceeds 1MB limit".to_string()));
+    if body_bytes.len() > limits.max_body_size {
+        warn!(%id, %addr, body_size = body_bytes.len(), max_allowed = limits.max_body_size, "Request body too large, rejecting");
+        return Err(payload_too_large_error("Request body exceeds size limit".to_string()));
     }
 
     let headers_json = serde_json::to_string(
@@ -97,9 +105,9 @@ async fn process_request_data(
     ).unwrap_or_else(|_| "{}".to_string());
 
     // Validate headers size
-    if headers_json.len() > MAX_HEADERS_SIZE {
-        warn!(%id, %addr, headers_size = headers_json.len(), "Request headers too large, rejecting");
-        return Err(payload_too_large_error("Request headers exceed 1MB limit".to_string()));
+    if headers_json.len() > limits.max_headers_size {
+        warn!(%id, %addr, headers_size = headers_json.len(), max_allowed = limits.max_headers_size, "Request headers too large, rejecting");
+        return Err(payload_too_large_error("Request headers exceed size limit".to_string()));
     }
 
     Ok(ProcessedRequest {
@@ -116,8 +124,8 @@ async fn enforce_request_limit(state: &AppState, bin_id: &str) -> Result<(), sql
         .fetch_one(&state.db)
         .await?;
 
-    if count > MAX_REQUESTS_PER_BIN {
-        let excess = count - MAX_REQUESTS_PER_BIN;
+    if count > state.limits.max_requests_per_bin {
+        let excess = count - state.limits.max_requests_per_bin;
         let deleted = query(
             "DELETE FROM requests WHERE bin_id = ? AND id IN (
                 SELECT id FROM requests WHERE bin_id = ? ORDER BY id ASC LIMIT ?
@@ -248,7 +256,7 @@ pub async fn log_request(
     check_bin_exists(&state, &id).await.map_err(|e| add_cors_headers(e.into_response()))?;
     
     // Process request data (headers, body, validation)
-    let request_data = process_request_data(req, &id, &addr).await.map_err(|e| add_cors_headers(e.into_response()))?;
+    let request_data = process_request_data(req, &id, &addr, &state.limits).await.map_err(|e| add_cors_headers(e.into_response()))?;
     
     // Store request in database
     match store_request_in_db(&state, &id, &request_data).await {
@@ -467,7 +475,8 @@ mod tests {
 
         AppState {
             db: pool,
-            bin_channels: std::sync::Arc::new(dashmap::DashMap::new()),
+            bin_channels: Arc::new(DashMap::new()),
+            limits: crate::config::LimitsConfig::default(),
         }
     }
 

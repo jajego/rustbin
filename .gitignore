@@ -1,2 +1,4 @@
 /target
 .env
+# Custom rustbin.toml configurations (uncomment if you want to ignore them)
+# rustbin.toml

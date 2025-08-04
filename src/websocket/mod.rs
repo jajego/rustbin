@@ -2,7 +2,7 @@ use axum::{
     extract::{ws::{WebSocketUpgrade, Message, WebSocket}, Path, State},
     response::IntoResponse,
 };
-use futures::{StreamExt};
+
 use tokio::sync::broadcast;
 use crate::state::AppState;
 

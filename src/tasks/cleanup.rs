@@ -6,13 +6,17 @@ use dashmap::DashMap;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
+use crate::config::CleanupConfig;
+
 pub async fn start_cleanup_task(
     db: SqlitePool, 
-    bin_channels: Arc<DashMap<String, broadcast::Sender<String>>>
+    bin_channels: Arc<DashMap<String, broadcast::Sender<String>>>,
+    config: &CleanupConfig,
 ) {
+    let cleanup_config = config.clone();
     tokio::spawn(async move {
         loop {
-            let cutoff = Utc::now() - Duration::hours(1);
+            let cutoff = Utc::now() - Duration::hours(cleanup_config.bin_expiry_hours);
             
             let expired_bins = match sqlx::query_as::<_, (String,)>(
                 "SELECT id FROM bins WHERE last_updated < ?"
@@ -24,7 +28,7 @@ pub async fn start_cleanup_task(
                 Ok(bins) => bins,
                 Err(err) => {
                     warn!("Failed to query expired bins: {:?}", err);
-                    sleep(TokioDuration::from_secs(60)).await;
+                    sleep(TokioDuration::from_secs(cleanup_config.cleanup_interval_seconds)).await;
                     continue;
                 }
             };
@@ -70,7 +74,7 @@ pub async fn start_cleanup_task(
                 );
             }
 
-            sleep(TokioDuration::from_secs(60)).await;
+            sleep(TokioDuration::from_secs(cleanup_config.cleanup_interval_seconds)).await;
         }
     });
 }

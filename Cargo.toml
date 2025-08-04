@@ -12,9 +12,9 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 http-body-util = "0.1"
 sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros", "uuid", "chrono"] }
-dotenvy = "0.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+toml = "0.8"
 tower-http = { version = "0.5", features = ["trace", "cors"] }
 tower_governor = { version = "0.4", features = ["axum"] }
 governor = "0.6.3"
@@ -25,3 +25,4 @@ dashmap = "5"
 [dev-dependencies]
 axum-test = "15"
 tokio-test = "0.4"
+tempfile = "3.0"

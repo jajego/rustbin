@@ -1,0 +1,49 @@
+# Rustbin Configuration File
+# This file contains all configurable settings for rustbin
+# Edit these values according to your deployment needs
+
+[server]
+# Server bind address (use "127.0.0.1" to only accept local connections)
+host = "0.0.0.0"
+# Server port
+port = 3000
+
+[database]
+# Database URL - supports SQLite
+# For SQLite: "sqlite://path/to/database.db"
+# For in-memory SQLite: "sqlite://:memory:"
+url = "sqlite://rustbin.db"
+# Maximum number of database connections in the pool
+max_connections = 5
+
+[rate_limiting]
+# Maximum requests allowed per second per IP
+requests_per_second = 2
+# Burst size for rate limiting (number of requests that can be made quickly)
+burst_size = 5
+# Interval in seconds for cleaning up rate limiting storage (prevents memory leaks)
+cleanup_interval_seconds = 60
+
+[limits]
+# Maximum number of requests stored per bin (older requests are automatically deleted)
+max_requests_per_bin = 100
+# Maximum request body size in bytes (1MB = 1048576)
+max_body_size = 1048576
+# Maximum request headers size in bytes (1MB = 1048576)
+max_headers_size = 1048576
+
+[cleanup]
+# How long in hours to keep inactive bins before deletion
+# Bins with active WebSocket connections are never deleted
+bin_expiry_hours = 1
+# How often in seconds to run the cleanup task
+cleanup_interval_seconds = 60
+
+[logging]
+# Rust log filter string
+# Available levels: error, warn, info, debug, trace
+# Examples:
+#   "info" - info level and above for all modules
+#   "rustbin=debug,tower_http=warn" - debug for rustbin, warn for tower_http
+#   "rustbin=trace" - trace level for rustbin only
+filter = "rustbin=info,tower_http=warn,sqlx=warn,hyper=warn"

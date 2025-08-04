@@ -39,6 +39,7 @@ async fn setup_test_app() -> TestServer {
     let state = AppState {
         db: pool,
         bin_channels: std::sync::Arc::new(dashmap::DashMap::new()),
+        limits: rustbin::config::LimitsConfig::default(),
     };
 
     let app = routes::create_router(state)

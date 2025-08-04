@@ -5,12 +5,15 @@ use std::time::Duration;
 use tower_governor::governor::GovernorConfig;
 use tower_governor::key_extractor::PeerIpKeyExtractor;
 
+use crate::config::RateLimitingConfig;
+
 // Prevent unbounded memory growth, and evict stale IPs.
 pub async fn start_rate_limit_cleanup(
     conf: &Arc<GovernorConfig<PeerIpKeyExtractor, NoOpMiddleware<QuantaInstant>>>,
+    config: &RateLimitingConfig,
 ) {
     let governor_limiter = conf.limiter().clone();
-    let interval = Duration::from_secs(60);
+    let interval = Duration::from_secs(config.cleanup_interval_seconds);
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(interval);

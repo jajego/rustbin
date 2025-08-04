@@ -186,6 +186,11 @@ fn add_cors_headers(mut response: Response) -> Response {
     response
 }
 
+// Handler for OPTIONS requests (CORS preflight)
+pub async fn options_handler() -> Response {
+    add_cors_headers(Response::new(Body::empty()))
+}
+
 pub async fn create_bin(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,

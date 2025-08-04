@@ -117,7 +117,7 @@
       }
       
       return {
-        id: crypto.randomUUID(),
+        id: data.request_id || crypto.randomUUID(),
         method: data.method || 'UNKNOWN',
         path: data.path || data.url || '/',
         headers,
@@ -151,7 +151,7 @@
       const body = bodyStart > -1 ? lines.slice(bodyStart).join('\n') : '';
       
       return {
-        id: crypto.randomUUID(),
+        id: crypto.randomUUID(), // Keep generating new ID for raw HTTP fallback since no request_id available
         method: method || 'UNKNOWN',
         path: path || '/',
         headers,
@@ -185,8 +185,52 @@
     });
   }
 
-  function clearRequests() {
-    requests = [];
+  async function clearRequests() {
+    try {
+      const response = await fetch(`https://api.rustb.in/bin/${binId}/clear`, {
+        method: 'DELETE'
+      });
+      
+      if (response.ok) {
+        requests = [];
+      } else {
+        console.error('Failed to clear requests:', response.status, response.statusText);
+      }
+    } catch (error) {
+      console.error('Failed to clear requests:', error);
+    }
+  }
+
+  async function deleteRequest(requestId: string) {
+    try {
+      const response = await fetch(`https://api.rustb.in/request/${requestId}`, {
+        method: 'DELETE'
+      });
+      
+      if (response.ok) {
+        // Remove the request from the local array
+        requests = requests.filter(r => r.id !== requestId);
+      } else {
+        console.error('Failed to delete request:', response.status, response.statusText);
+      }
+    } catch (error) {
+      console.error('Failed to delete request:', error);
+    }
+  }
+
+  function copyApiUrl() {
+    const apiUrl = `https://api.rustb.in/bin/${binId}`;
+    navigator.clipboard.writeText(apiUrl).then(() => {
+      // Could add a toast notification here
+    }).catch(() => {
+      // Fallback for older browsers
+      const textArea = document.createElement('textarea');
+      textArea.value = apiUrl;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+    });
   }
 
   onMount(() => {
@@ -252,25 +296,44 @@
 <!-- Modern Header -->
 <div class="min-h-screen bg-gray-50 fallback-container">
   <div class="max-w-7xl mx-auto px-4 py-6 fallback-wrapper">
-    <!-- Header Section -->
-    <div class="flex items-center justify-between mb-6 fallback-header">
-      <div class="flex items-center space-x-3 fallback-title">
-        <div class="w-2 h-2 rounded-full fallback-status-dot {isConnected ? 'bg-green-500 animate-pulse connected' : 'bg-red-500'}"></div>
-        <h1 class="text-2xl font-bold text-gray-900">
-          Request Bin <span class="text-blue-600">#{binId}</span>
-        </h1>
-        <span class="text-sm text-gray-500">
-          {isConnected ? 'Connected' : 'Disconnected'}
-        </span>
-      </div>
-      
-      <button 
-        on:click={clearRequests}
-        class="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-sm rounded-md font-medium transition-colors fallback-button"
-      >
-        Clear All
-      </button>
-    </div>
+        <!-- API URL Section -->
+     <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+       <div class="flex items-center justify-between">
+         <div>
+           <p class="text-sm font-medium text-blue-900">Your API URL:</p>
+           <code class="text-sm font-mono text-blue-700 bg-blue-100 px-2 py-1 rounded mt-1 inline-block">
+             https://api.rustb.in/bin/{binId}
+           </code>
+         </div>
+         <button 
+           on:click={copyApiUrl}
+           class="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-xs rounded-md font-medium transition-colors"
+           title="Copy to clipboard"
+         >
+           Copy
+         </button>
+       </div>
+     </div>
+
+     <!-- Header Section -->
+     <div class="flex items-center justify-between mb-6 fallback-header">
+       <div class="flex items-center space-x-3 fallback-title">
+         <div class="w-2 h-2 rounded-full fallback-status-dot {isConnected ? 'bg-green-500 animate-pulse connected' : 'bg-red-500'}"></div>
+         <h1 class="text-2xl font-bold text-gray-900">
+           Request Bin <span class="text-blue-600">#{binId}</span>
+         </h1>
+         <span class="text-sm text-gray-500">
+           {isConnected ? 'Connected' : 'Disconnected'}
+         </span>
+       </div>
+       
+       <button 
+         on:click={clearRequests}
+         class="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-sm rounded-md font-medium transition-colors fallback-button"
+       >
+         Clear All
+       </button>
+     </div>
 
     <!-- Stats Bar -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 fallback-stats">
@@ -398,48 +461,59 @@
       <div class="space-y-4 fallback-requests">
         {#each requests as request (request.id)}
           <div class="bg-white rounded-lg shadow-sm border hover:shadow-md transition-shadow fallback-request-card">
-            <!-- Card Header -->
-            <div class="px-4 py-3 border-b bg-gray-50 rounded-t-lg fallback-request-header">
-              <div class="flex items-center justify-between">
-                <div class="flex items-center space-x-3 fallback-request-info">
-                  <span class="px-2 py-1 text-xs font-medium rounded-md fallback-method-badge {request.method.toLowerCase() === 'get' ? 'fallback-method-get' : request.method.toLowerCase() === 'post' ? 'fallback-method-post' : 'fallback-method-default'} {getMethodColor(request.method)}">
-                    {request.method}
-                  </span>
-                  <code class="text-sm font-mono text-gray-700 bg-white px-2 py-1 rounded border fallback-path">
-                    {request.path}
-                  </code>
-                </div>
-                <div class="flex items-center space-x-3 text-xs text-gray-500 fallback-request-meta">
-                  {#if request.ip}
-                    <span class="flex items-center">
-                      <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9v-9m0-9v9"></path>
-                      </svg>
-                      {request.ip}
-                    </span>
-                  {/if}
-                  <span class="flex items-center">
-                    <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                    </svg>
-                    {formatTime(request.timestamp)}
-                  </span>
-                </div>
-              </div>
-            </div>
+                         <!-- Card Header -->
+             <div class="px-4 py-3 border-b bg-gray-50 rounded-t-lg fallback-request-header">
+               <div class="flex items-center justify-between">
+                 <div class="flex items-center space-x-3 fallback-request-info">
+                   <span class="px-2 py-1 text-xs font-medium rounded-md fallback-method-badge {request.method.toLowerCase() === 'get' ? 'fallback-method-get' : request.method.toLowerCase() === 'post' ? 'fallback-method-post' : 'fallback-method-default'} {getMethodColor(request.method)}">
+                     {request.method}
+                   </span>
+                   <code class="text-sm font-mono text-gray-700 bg-white px-2 py-1 rounded border fallback-path">
+                     {request.path}
+                   </code>
+                 </div>
+                 <div class="flex items-center space-x-3">
+                   <div class="flex items-center space-x-3 text-xs text-gray-500 fallback-request-meta">
+                     {#if request.ip}
+                       <span class="flex items-center">
+                         <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9v-9m0-9v9"></path>
+                         </svg>
+                         {request.ip}
+                       </span>
+                     {/if}
+                     <span class="flex items-center">
+                       <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                       </svg>
+                       {formatTime(request.timestamp)}
+                     </span>
+                   </div>
+                   <button 
+                     on:click={() => deleteRequest(request.id)}
+                     class="ml-2 p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                     title="Delete request"
+                   >
+                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                     </svg>
+                   </button>
+                 </div>
+               </div>
+             </div>
 
             <!-- Card Body -->
             <div class="p-4 fallback-request-body">
-              <div class="grid md:grid-cols-2 gap-4">
-                <!-- Headers Section -->
-                <div>
+              <div class="grid grid-cols-1 md:grid-cols-10 gap-4">
+                <!-- Headers Section (40%) -->
+                <div class="md:col-span-4">
                   <h4 class="text-sm font-medium text-gray-900 mb-2 flex items-center fallback-section-title">
                     <svg class="w-3 h-3 mr-1 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path>
                     </svg>
                     Headers
                   </h4>
-                  <div class="bg-gray-50 rounded-md p-2 max-h-32 overflow-y-auto text-xs fallback-section">
+                  <div class="bg-gray-50 rounded-md p-2 max-h-40 overflow-y-auto text-xs fallback-section">
                     {#if Object.keys(request.headers).length > 0}
                       <div class="space-y-1">
                         {#each Object.entries(request.headers) as [key, value]}
@@ -455,15 +529,15 @@
                   </div>
                 </div>
 
-                <!-- Body Section -->
-                <div>
+                <!-- Body Section (40%) -->
+                <div class="md:col-span-4">
                   <h4 class="text-sm font-medium text-gray-900 mb-2 flex items-center fallback-section-title">
                     <svg class="w-3 h-3 mr-1 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
                     </svg>
                     Body
                   </h4>
-                  <div class="bg-gray-50 rounded-md p-2 max-h-32 overflow-y-auto fallback-section">
+                  <div class="bg-gray-50 rounded-md p-2 max-h-40 overflow-y-auto fallback-section">
                     {#if request.body.trim()}
                       <pre class="text-xs text-gray-700 whitespace-pre-wrap break-all font-mono fallback-body-content">{request.body}</pre>
 {:else}
@@ -471,22 +545,24 @@
                     {/if}
                   </div>
                 </div>
-              </div>
 
-              <!-- User Agent (if available) -->
-              {#if request.userAgent}
-                <div class="mt-3 pt-3 border-t">
-                  <h4 class="text-sm font-medium text-gray-900 mb-1 flex items-center fallback-section-title">
-                    <svg class="w-3 h-3 mr-1 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
-                    </svg>
-                    User Agent
-                  </h4>
-                  <p class="text-xs text-gray-600 bg-gray-50 rounded-md p-2 break-all font-mono fallback-body-content">
-                    {request.userAgent}
-                  </p>
-                </div>
-              {/if}
+                <!-- User Agent Section (20%) -->
+                {#if request.userAgent}
+                  <div class="md:col-span-2">
+                    <h4 class="text-sm font-medium text-gray-900 mb-2 flex items-center fallback-section-title">
+                      <svg class="w-3 h-3 mr-1 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+                      </svg>
+                      User Agent
+                    </h4>
+                    <div class="bg-gray-50 rounded-md p-2 max-h-40 overflow-y-auto text-xs fallback-section">
+                      <p class="text-xs text-gray-600 break-all font-mono fallback-body-content">
+                        {request.userAgent}
+                      </p>
+                    </div>
+                  </div>
+                {/if}
+              </div>
             </div>
           </div>
     {/each}
@@ -701,12 +777,21 @@
     color: #6b7280;
   }
   
-  .fallback-request-body {
-    padding: 1rem;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-  }
+   .fallback-request-body {
+     padding: 1rem;
+   }
+   
+   .fallback-request-body > div {
+     display: grid;
+     grid-template-columns: 4fr 4fr 2fr;
+     gap: 1rem;
+   }
+   
+   @media (min-width: 768px) {
+     .fallback-request-body > div {
+       grid-template-columns: 4fr 4fr 2fr;
+     }
+   }
   
   .fallback-section {
     background-color: #f9fafb;
@@ -786,9 +871,9 @@
       align-items: stretch;
     }
     
-    .fallback-request-body {
-      grid-template-columns: 1fr;
-    }
+     .fallback-request-body > div {
+       grid-template-columns: 1fr;
+     }
     
     .fallback-request-header {
       flex-direction: column;

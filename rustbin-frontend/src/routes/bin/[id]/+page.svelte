@@ -61,8 +61,14 @@
       loadError = null;
       
       const response = await fetch(`http://localhost:3000/bin/${binId}/inspect`);
+      
+      if (response.status === 404) {
+        loadError = 'bin-not-found';
+        return;
+      }
+      
       if (!response.ok) {
-        throw new Error(`Failed to fetch requests: ${response.status}`);
+        throw new Error(`Failed to fetch requests: ${response.status} ${response.statusText}`);
       }
       
       const apiRequests: ApiLoggedRequest[] = await response.json();
@@ -184,46 +190,61 @@
   }
 
   onMount(() => {
-    // First, fetch existing requests
-    fetchExistingRequests();
-    
-    // Then establish WebSocket connection for real-time updates
-    const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = `${protocol}://localhost:3000/bin/${binId}/ws`;
+    let cleanup: (() => void) | undefined;
 
-    socket = new WebSocket(url);
-
-    socket.onopen = () => {
-      isConnected = true;
-    };
-
-    socket.onmessage = (event) => {
-      const parsed = parseHttpRequest(event.data);
+    const initializeConnection = async () => {
+      // First, fetch existing requests
+      await fetchExistingRequests();
       
-      // Check if this request already exists (avoid duplicates)
-      const existingIndex = requests.findIndex(req => req.id === parsed.id);
-      if (existingIndex === -1) {
-        // Add new request to the top of the list
-        requests = [parsed, ...requests];
-      } else {
-        // Update existing request (in case data was incomplete initially)
-        requests[existingIndex] = parsed;
-        requests = requests;
+      // Don't establish WebSocket connection if bin doesn't exist
+      if (loadError === 'bin-not-found') {
+        return;
       }
+      
+      // Then establish WebSocket connection for real-time updates
+      const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+      const url = `${protocol}://localhost:3000/bin/${binId}/ws`;
+
+      socket = new WebSocket(url);
+
+      socket.onopen = () => {
+        isConnected = true;
+      };
+
+      socket.onmessage = (event) => {
+        const parsed = parseHttpRequest(event.data);
+        
+        // Check if this request already exists (avoid duplicates)
+        const existingIndex = requests.findIndex(req => req.id === parsed.id);
+        if (existingIndex === -1) {
+          // Add new request to the top of the list
+          requests = [parsed, ...requests];
+        } else {
+          // Update existing request (in case data was incomplete initially)
+          requests[existingIndex] = parsed;
+          requests = requests;
+        }
+      };
+
+      socket.onerror = (e) => {
+        console.error('WebSocket error:', e);
+        isConnected = false;
+      };
+
+      socket.onclose = () => {
+        console.log('WebSocket closed');
+        isConnected = false;
+      };
+
+      cleanup = () => {
+        socket?.close();
+      };
     };
 
-    socket.onerror = (e) => {
-      console.error('WebSocket error:', e);
-      isConnected = false;
-    };
-
-    socket.onclose = () => {
-      console.log('WebSocket closed');
-      isConnected = false;
-    };
+    initializeConnection();
 
     return () => {
-      socket?.close();
+      cleanup?.();
     };
   });
 </script>
@@ -313,6 +334,35 @@
         <p class="text-gray-600 text-sm max-w-md mx-auto">
           Fetching existing requests for this bin...
         </p>
+      </div>
+    {:else if loadError === 'bin-not-found'}
+      <div class="text-center py-12 fallback-empty">
+        <div class="w-16 h-16 mx-auto mb-4 bg-yellow-100 rounded-lg flex items-center justify-center fallback-empty-icon">
+          <svg class="w-8 h-8 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.172 16.172a4 4 0 015.656 0M9 12h6m-6 4h6m6 5H3a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v14a2 2 0 01-2 2z"></path>
+          </svg>
+        </div>
+        <h3 class="text-lg font-semibold text-gray-900 mb-2">Bin Not Found</h3>
+        <p class="text-gray-600 text-sm max-w-md mx-auto mb-4">
+          The bin with ID <code class="bg-gray-100 px-1 py-0.5 rounded text-xs font-mono">{binId}</code> doesn't exist.
+        </p>
+        <p class="text-gray-500 text-xs max-w-md mx-auto mb-4">
+          It may have been deleted or you might have an incorrect URL.
+        </p>
+        <div class="flex gap-2 justify-center">
+          <button 
+            on:click={() => window.location.href = '/'}
+            class="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded-md font-medium transition-colors fallback-button"
+          >
+            Create New Bin
+          </button>
+          <button 
+            on:click={fetchExistingRequests}
+            class="px-3 py-1.5 bg-gray-500 hover:bg-gray-600 text-white text-sm rounded-md font-medium transition-colors fallback-button"
+          >
+            Try Again
+          </button>
+        </div>
       </div>
     {:else if loadError}
       <div class="text-center py-12 fallback-empty">
@@ -416,7 +466,7 @@
                   <div class="bg-gray-50 rounded-md p-2 max-h-32 overflow-y-auto fallback-section">
                     {#if request.body.trim()}
                       <pre class="text-xs text-gray-700 whitespace-pre-wrap break-all font-mono fallback-body-content">{request.body}</pre>
-                    {:else}
+{:else}
                       <p class="text-xs text-gray-500 italic fallback-empty-text">No body content</p>
                     {/if}
                   </div>
@@ -439,9 +489,9 @@
               {/if}
             </div>
           </div>
-        {/each}
+    {/each}
       </div>
-    {/if}
+{/if}
   </div>
 </div>
 

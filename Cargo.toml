@@ -21,3 +21,7 @@ governor = "0.6.3"
 tokio-tungstenite = "0.21"
 futures = "0.3"
 dashmap = "5"
+
+[dev-dependencies]
+axum-test = "15"
+tokio-test = "0.4"

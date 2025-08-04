@@ -19,7 +19,7 @@ async fn handle_socket(mut socket: WebSocket, bin_id: String, state: AppState) {
         .bin_channels
         .entry(bin_id.clone())
         .or_insert_with(|| {
-            let (tx, _) = broadcast::channel(100);
+            let (tx, _) = broadcast::channel(1000);
             tx
         })
         .clone();

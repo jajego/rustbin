@@ -18,9 +18,9 @@ max_connections = 5
 
 [rate_limiting]
 # Maximum requests allowed per second per IP
-requests_per_second = 2
+requests_per_second = 10
 # Burst size for rate limiting (number of requests that can be made quickly)
-burst_size = 5
+burst_size = 20
 # Interval in seconds for cleaning up rate limiting storage (prevents memory leaks)
 cleanup_interval_seconds = 60
 

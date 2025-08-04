@@ -54,11 +54,20 @@ async fn main() {
         .make_span_with(DefaultMakeSpan::new().include_headers(true))
         .on_response(DefaultOnResponse::new().include_headers(true));
 
-    let app = routes::create_router(app_state)
-        .layer(trace)
+    // Create rate-limited routes (everything except WebSocket)
+    let rate_limited_routes = routes::bin::bin_routes(app_state.clone())
+        .merge(routes::health::health_routes())
         .layer(GovernorLayer {
-           config: governor_conf,
-       });
+            config: governor_conf,
+        });
+    
+    // Create WebSocket routes without rate limiting
+    let websocket_routes = routes::bin::websocket_routes(app_state.clone());
+    
+    // Combine all routes
+    let app = rate_limited_routes
+        .merge(websocket_routes)
+        .layer(trace);
 
     let addr = SocketAddr::from((
         config.server.host.parse::<std::net::IpAddr>()

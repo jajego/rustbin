@@ -42,7 +42,9 @@ async fn setup_test_app() -> TestServer {
         limits: rustbin::config::LimitsConfig::default(),
     };
 
-    let app = routes::create_router(state)
+    let app = routes::bin::bin_routes(state.clone())
+        .merge(routes::health::health_routes())
+        .merge(routes::bin::websocket_routes(state))
         .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
     TestServer::new(app).unwrap()
 }

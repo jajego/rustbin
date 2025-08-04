@@ -394,6 +394,38 @@ pub async fn ping(Query(query): Query<PingQuery>) -> impl IntoResponse {
     add_cors_headers(response)
 }
 
+pub async fn clear_bin_requests(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, impl IntoResponse> {
+    let _uuid = validate_bin_id(&id).map_err(|e| add_cors_headers(e.into_response()))?;
+    
+    // Check if bin exists
+    check_bin_exists(&state, &id).await.map_err(|e| add_cors_headers(e.into_response()))?;
+
+    let result = query("DELETE FROM requests WHERE bin_id = ?")
+        .bind(&id)
+        .execute(&state.db)
+        .await;
+
+    match result {
+        Ok(res) => {
+            let deleted_count = res.rows_affected();
+            info!(%id, %addr, deleted_count, "Cleared all requests from bin");
+            update_last_updated(&state, &id).await.ok();
+            
+            let response = format!("Cleared {} requests from bin", deleted_count).into_response();
+            Ok(add_cors_headers(response))
+        },
+        Err(err) => {
+            error!(%id, %addr, %err, "DB error while clearing bin requests");
+            let response = (StatusCode::INTERNAL_SERVER_ERROR, "Failed to clear bin requests").into_response();
+            Err(add_cors_headers(response))     
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -958,5 +990,161 @@ mod tests {
         for i in 0..5 {
             assert_eq!(requests[i].body.as_deref().unwrap(), format!("request_{}", i));
         }
+    }
+
+    #[tokio::test]
+    async fn test_clear_bin_requests() {
+        let state = setup_test_db().await;
+        let addr = test_addr();
+        
+        // Create a bin first
+        let bin_id = {
+            let result = create_bin(State(state.clone()), ConnectInfo(addr)).await;
+            assert!(result.is_ok());
+            let resp = result.ok().unwrap();
+            let bin_response: BinResponse = response_json(resp).await;
+            bin_response.bin_id
+        };
+
+        // Log multiple requests
+        for i in 0..3 {
+            let req = Request::builder()
+                .method(Method::POST)
+                .uri("/")
+                .header("x-request", i.to_string())
+                .body(Body::from(format!("request body {}", i)))
+                .unwrap();
+
+            let log_result = log_request(
+                State(state.clone()),
+                Path(bin_id.clone()),
+                ConnectInfo(addr),
+                req,
+            )
+            .await;
+            assert!(log_result.is_ok());
+        }
+
+        // Verify we have 3 requests
+        let result = inspect_bin(
+            State(state.clone()),
+            Path(bin_id.clone()),
+            ConnectInfo(addr),
+        )
+        .await;
+        assert!(result.is_ok());
+        let resp = result.ok().unwrap();
+        let requests: Vec<LoggedRequest> = response_json(resp).await;
+        assert_eq!(requests.len(), 3);
+
+        // Clear all requests
+        let result = clear_bin_requests(
+            State(state.clone()),
+            ConnectInfo(addr),
+            Path(bin_id.clone()),
+        )
+        .await;
+        assert!(result.is_ok());
+        let resp = result.ok().unwrap();
+        let msg = response_string(resp).await;
+        assert!(msg.contains("Cleared 3 requests from bin"));
+
+        // Verify all requests are gone
+        let result = inspect_bin(
+            State(state.clone()),
+            Path(bin_id.clone()),
+            ConnectInfo(addr),
+        )
+        .await;
+        assert!(result.is_ok());
+        let resp = result.ok().unwrap();
+        let requests: Vec<LoggedRequest> = response_json(resp).await;
+        assert_eq!(requests.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_clear_nonexistent_bin() {
+        let state = setup_test_db().await;
+        let addr = test_addr();
+        
+        let fake_bin_id = uuid::Uuid::new_v4().to_string();
+        
+        let result = clear_bin_requests(
+            State(state.clone()),
+            ConnectInfo(addr),
+            Path(fake_bin_id),
+        )
+        .await;
+        
+        assert!(result.is_err());
+        let response = result.err().unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_delete_individual_request_integration() {
+        let state = setup_test_db().await;
+        let addr = test_addr();
+        
+        // Create a bin first
+        let bin_id = {
+            let result = create_bin(State(state.clone()), ConnectInfo(addr)).await;
+            assert!(result.is_ok());
+            let resp = result.ok().unwrap();
+            let bin_response: BinResponse = response_json(resp).await;
+            bin_response.bin_id
+        };
+
+        // Log multiple requests
+        for i in 0..3 {
+            let req = Request::builder()
+                .method(Method::POST)
+                .uri("/")
+                .body(Body::from(format!("request body {}", i)))
+                .unwrap();
+
+            let log_result = log_request(
+                State(state.clone()),
+                Path(bin_id.clone()),
+                ConnectInfo(addr),
+                req,
+            )
+            .await;
+            assert!(log_result.is_ok());
+        }
+
+        // Get all requests
+        let result = inspect_bin(
+            State(state.clone()),
+            Path(bin_id.clone()),
+            ConnectInfo(addr),
+        )
+        .await;
+        assert!(result.is_ok());
+        let resp = result.ok().unwrap();
+        let requests: Vec<LoggedRequest> = response_json(resp).await;
+        assert_eq!(requests.len(), 3);
+
+        // Delete the middle request
+        let request_id_to_delete = requests[1].request_id.to_string();
+        let result = delete_request(
+            State(state.clone()),
+            ConnectInfo(addr),
+            Path(request_id_to_delete),
+        )
+        .await;
+        assert!(result.is_ok());
+
+        // Verify we now have 2 requests
+        let result = inspect_bin(
+            State(state.clone()),
+            Path(bin_id.clone()),
+            ConnectInfo(addr),
+        )
+        .await;
+        assert!(result.is_ok());
+        let resp = result.ok().unwrap();
+        let requests: Vec<LoggedRequest> = response_json(resp).await;
+        assert_eq!(requests.len(), 2);
     }
 }

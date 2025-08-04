@@ -15,7 +15,7 @@ A fast, self-hostable request bin for debugging webhooks and HTTP requests.
 
 ```bash
 # Clone and run
-git clone https://github.com/YOUR_USERNAME/rustbin.git
+git clone https://github.com/jajego/rustbin.git
 cd rustbin
 cargo run
 

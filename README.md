@@ -174,14 +174,6 @@ cargo clippy
 cd rustbin-frontend && npm run lint
 ```
 
-## Contributing
-
-Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
-
-## Changelog
-
-See [CHANGELOG.md](CHANGELOG.md) for a detailed list of changes and version history.
-
 ## License
 
 MIT

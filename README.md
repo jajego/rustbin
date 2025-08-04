@@ -15,7 +15,7 @@ A fast, self-hostable request bin for debugging webhooks and HTTP requests.
 
 ```bash
 # Clone and run
-git clone https://github.com/your-username/rustbin.git
+git clone https://github.com/YOUR_USERNAME/rustbin.git
 cd rustbin
 cargo run
 
@@ -99,6 +99,57 @@ const ws = new WebSocket('ws://localhost:3000/bin/{bin-id}/ws');
 ws.onmessage = (event) => console.log(JSON.parse(event.data));
 ```
 
+## Security
+
+rustbin includes several security features:
+
+- **Rate limiting** - Prevents abuse with configurable per-IP limits
+- **Request size limits** - Configurable body and header size restrictions  
+- **Input validation** - All inputs are validated and sanitized
+- **No script execution** - Request bodies are stored as-is, no code execution
+- **Automatic cleanup** - Bins expire automatically to prevent data accumulation
+
+### Security Considerations
+
+- **Network access**: Runs on configurable port (default 3000)
+- **Data persistence**: Requests are stored in SQLite database
+- **No authentication**: Public bins - suitable for non-sensitive debugging
+- **CORS enabled**: Cross-origin requests allowed for webhook testing
+
+For production deployments:
+- Use reverse proxy (nginx/Caddy) with HTTPS
+- Configure appropriate firewall rules
+- Regular backups of the database
+- Monitor resource usage and logs
+
+## Performance & Scaling
+
+rustbin is designed for efficient resource usage:
+
+### Default Limits
+- 100 requests per bin (configurable)
+- 1MB max request body size
+- 1MB max headers size  
+- 2 requests/second per IP (burst of 5)
+- 1 hour bin expiry time
+
+### Resource Usage
+- **Memory**: ~10-50MB base usage + request storage
+- **Disk**: SQLite database grows with stored requests
+- **CPU**: Minimal - async I/O with Tokio runtime
+
+### Scaling Recommendations
+- **Single instance**: Handles thousands of concurrent connections
+- **Database**: SQLite suitable for most use cases; consider PostgreSQL for high load
+- **Reverse proxy**: Use nginx/Caddy for TLS termination and load balancing
+- **Monitoring**: Track database size, connection counts, and response times
+
+### Tuning
+- Adjust cleanup intervals for your usage patterns
+- Lower bin expiry time for high-traffic scenarios  
+- Increase rate limits for trusted environments
+- Monitor database growth and implement archival if needed
+
 ## Development
 
 ```bash
@@ -113,7 +164,23 @@ cargo watch -x run
 cd rustbin-frontend
 npm install
 npm run dev
+
+# Format code
+cargo fmt
+cd rustbin-frontend && npm run format
+
+# Lint code
+cargo clippy
+cd rustbin-frontend && npm run lint
 ```
+
+## Contributing
+
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a detailed list of changes and version history.
 
 ## License
 

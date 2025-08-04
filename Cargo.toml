@@ -1,7 +1,13 @@
 [package]
 name = "rustbin"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
+description = "A fast, self-hostable request bin for debugging webhooks and HTTP requests"
+repository = "https://github.com/YOUR_USERNAME/rustbin"
+license = "MIT"
+keywords = ["webhook", "http", "debugging", "request-bin", "axum"]
+categories = ["web-programming", "development-tools"]
+authors = ["Your Name <your.email@example.com>"]
 
 [dependencies]
 axum = { version = "0.7", features = ["ws"] }

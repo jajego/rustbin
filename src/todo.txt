@@ -1,9 +1,7 @@
 housekeeping
-- do not expire active connections
 - offer in memory option (As opposed to default sqlite)
 - when using sqlite option, prevent a user from viewing another users' bins. this might just look like providing an optional code-protected bucket rather than any jwt auth
 - Clear All should delete all requests in the bin
-- Clean up some of the code in handlers.rs
 
 endpoints
 -

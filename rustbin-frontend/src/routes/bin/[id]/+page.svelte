@@ -60,7 +60,7 @@
       isLoading = true;
       loadError = null;
       
-      const response = await fetch(`http://localhost:3000/bin/${binId}/inspect`);
+      const response = await fetch(`https://api.rustb.in/bin/${binId}/inspect`);
       
       if (response.status === 404) {
         loadError = 'bin-not-found';
@@ -203,7 +203,7 @@
       
       // Then establish WebSocket connection for real-time updates
       const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-      const url = `${protocol}://localhost:3000/bin/${binId}/ws`;
+      const url = `${protocol}://api.rustb.in/bin/${binId}/ws`;
 
       socket = new WebSocket(url);
 

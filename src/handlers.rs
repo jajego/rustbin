@@ -7,7 +7,7 @@ use axum::{
 };
 use chrono::Utc;
 use http_body_util::BodyExt;
-use sqlx::{query, Row};
+use sqlx::query;
 use std::{collections::HashMap, net::SocketAddr};
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -22,6 +22,130 @@ use crate::utils::uuid::validate_uuid;
 const MAX_REQUESTS_PER_BIN: i64 = 100;
 const MAX_HEADERS_SIZE: usize = 1024 * 1024; // 1MB
 const MAX_BODY_SIZE: usize = 1024 * 1024; // 1MB
+
+// Common error response helpers
+fn internal_error(message: String) -> (StatusCode, String) {
+    (StatusCode::INTERNAL_SERVER_ERROR, message)
+}
+
+fn not_found_error(message: String) -> (StatusCode, String) {
+    (StatusCode::NOT_FOUND, message)
+}
+
+fn bad_request_error(message: String) -> (StatusCode, String) {
+    (StatusCode::BAD_REQUEST, message)
+}
+
+fn payload_too_large_error(message: String) -> (StatusCode, String) {
+    (StatusCode::PAYLOAD_TOO_LARGE, message)
+}
+
+// Validation helpers
+fn validate_bin_id(id: &str) -> Result<Uuid, (StatusCode, String)> {
+    validate_uuid(id).map_err(|e| bad_request_error(e))
+}
+
+async fn check_bin_exists(state: &AppState, id: &str) -> Result<(), (StatusCode, String)> {
+    let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM bins WHERE id = ?")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|err| {
+            error!(%id, %err, "Failed to check bin existence");
+            internal_error("Failed to check bin existence".to_string())
+        })?;
+
+    if count == 0 {
+        warn!(%id, "Attempted to access non-existent bin");
+        return Err(not_found_error("Bin not found".to_string()));
+    }
+    Ok(())
+}
+
+// Request processing helpers
+#[derive(Debug)]
+struct ProcessedRequest {
+    method: String,
+    headers_json: String,
+    body: String,
+    request_id: Uuid,
+}
+
+async fn process_request_data(
+    req: Request<Body>,
+    id: &str,
+    addr: &SocketAddr,
+) -> Result<ProcessedRequest, (StatusCode, String)> {
+    let (parts, body) = req.into_parts();
+    let method = parts.method;
+    let headers = parts.headers;
+
+    let body_bytes = body.collect().await.unwrap().to_bytes();
+    let body_str = String::from_utf8_lossy(&body_bytes).to_string();
+    
+    // Validate body size
+    if body_bytes.len() > MAX_BODY_SIZE {
+        warn!(%id, %addr, body_size = body_bytes.len(), "Request body too large, rejecting");
+        return Err(payload_too_large_error("Request body exceeds 1MB limit".to_string()));
+    }
+
+    let headers_json = serde_json::to_string(
+        &headers
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect::<HashMap<_, _>>(),
+    ).unwrap_or_else(|_| "{}".to_string());
+
+    // Validate headers size
+    if headers_json.len() > MAX_HEADERS_SIZE {
+        warn!(%id, %addr, headers_size = headers_json.len(), "Request headers too large, rejecting");
+        return Err(payload_too_large_error("Request headers exceed 1MB limit".to_string()));
+    }
+
+    Ok(ProcessedRequest {
+        method: method.to_string(),
+        headers_json,
+        body: body_str,
+        request_id: Uuid::new_v4(),
+    })
+}
+
+async fn enforce_request_limit(state: &AppState, bin_id: &str) -> Result<(), sqlx::Error> {
+    let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM requests WHERE bin_id = ?")
+        .bind(bin_id)
+        .fetch_one(&state.db)
+        .await?;
+
+    if count > MAX_REQUESTS_PER_BIN {
+        let excess = count - MAX_REQUESTS_PER_BIN;
+        let deleted = query(
+            "DELETE FROM requests WHERE bin_id = ? AND id IN (
+                SELECT id FROM requests WHERE bin_id = ? ORDER BY id ASC LIMIT ?
+            )"
+        )
+        .bind(bin_id)
+        .bind(bin_id)
+        .bind(excess)
+        .execute(&state.db)
+        .await?;
+
+        info!(%bin_id, rows_deleted = deleted.rows_affected(), "Cleaned up old requests to maintain limit");
+    }
+    Ok(())
+}
+
+async fn send_websocket_notification(state: &AppState, bin_id: &str, request_data: &ProcessedRequest) {
+    if let Some(sender) = state.bin_channels.get(bin_id) {
+        let payload = serde_json::json!({
+            "method": request_data.method,
+            "headers": request_data.headers_json,
+            "body": request_data.body,
+            "timestamp": Utc::now().to_rfc3339(),
+            "request_id": request_data.request_id,
+        });
+        let _ = sender.send(payload.to_string());
+    }
+}
 
 pub async fn create_bin(
     State(state): State<AppState>,
@@ -57,122 +181,58 @@ async fn update_last_updated(state: &AppState, id: &str) -> Result<(), sqlx::Err
     Ok(())
 }
     
+async fn store_request_in_db(
+    state: &AppState,
+    bin_id: &str,
+    request_data: &ProcessedRequest,
+) -> Result<(), sqlx::Error> {
+    query(
+        "INSERT INTO requests (bin_id, request_id, method, headers, body, timestamp) VALUES (?, ?, ?, ?, ?, ?)"
+    )
+    .bind(bin_id)
+    .bind(&request_data.request_id)
+    .bind(&request_data.method)
+    .bind(&request_data.headers_json)
+    .bind(&request_data.body)
+    .bind(Utc::now().to_rfc3339())
+    .execute(&state.db)
+    .await?;
+    Ok(())
+}
+
 pub async fn log_request(
     State(state): State<AppState>,
     Path(id): Path<String>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request<Body>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-    validate_uuid(&id).map_err(|e| (StatusCode::BAD_REQUEST, e).into_response())?;
-
-    let (parts, body) = req.into_parts();
-    let method = parts.method;
-    let headers = parts.headers;
-
-    let body_bytes = body.collect().await.unwrap().to_bytes();
-    let body_str = String::from_utf8_lossy(&body_bytes).to_string();
+    // Validate input
+    validate_bin_id(&id).map_err(|e| e.into_response())?;
     
-    // Validate body size
-    if body_bytes.len() > MAX_BODY_SIZE {
-        warn!(%id, %addr, body_size = body_bytes.len(), "Request body too large, rejecting");
-        return Err((StatusCode::PAYLOAD_TOO_LARGE, "Request body exceeds 1MB limit").into_response());
-    }
-
-    let request_id = Uuid::new_v4();
-
-    let headers_json = serde_json::to_string(
-        &headers
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-            .collect::<HashMap<_, _>>(),
-    ).unwrap_or_else(|_| "{}".to_string());
-
-    // Validate headers size
-    if headers_json.len() > MAX_HEADERS_SIZE {
-        warn!(%id, %addr, headers_size = headers_json.len(), "Request headers too large, rejecting");
-        return Err((StatusCode::PAYLOAD_TOO_LARGE, "Request headers exceed 1MB limit").into_response());
-    }
-
-    // Check if the bin exists before logging the request
-    let bin_exists = query("SELECT COUNT(*) FROM bins WHERE id = ?")
-        .bind(&id)
-        .fetch_one(&state.db)
-        .await;
-
-    match bin_exists {
-        Ok(row) => {
-            let count: i64 = row.get(0);
-            if count == 0 {
-                warn!(%id, %addr, "Attempted to log request to non-existent bin");
-                return Err((StatusCode::NOT_FOUND, "Bin not found").into_response());
-            }
-        }
-        Err(err) => {
-            error!(%id, %addr, %err, "Failed to check bin existence");
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, "Failed to check bin existence").into_response());
-        }
-    }
-
-    let result = query(
-        "INSERT INTO requests (bin_id, request_id, method, headers, body, timestamp) VALUES (?, ?, ?, ?, ?, ?)"
-    )
-    .bind(&id)
-    .bind(&request_id)
-    .bind(method.to_string())
-    .bind(headers_json.clone())
-    .bind(body_str.clone())
-    .bind(Utc::now().to_rfc3339())
-    .execute(&state.db)
-    .await;
-
-    match result {
+    // Check if bin exists
+    check_bin_exists(&state, &id).await.map_err(|e| e.into_response())?;
+    
+    // Process request data (headers, body, validation)
+    let request_data = process_request_data(req, &id, &addr).await.map_err(|e| e.into_response())?;
+    
+    // Store request in database
+    match store_request_in_db(&state, &id, &request_data).await {
         Ok(_) => {
-            info!(%id, %addr, %method, headers = %headers_json, body = %body_str, "Request logged");
-
-            // Enforce request limit per bin (keep only the latest 100 requests)
-            let count_result = query("SELECT COUNT(*) FROM requests WHERE bin_id = ?")
-                .bind(&id)
-                .fetch_one(&state.db)
-                .await;
-
-            if let Ok(row) = count_result {
-                let count: i64 = row.get(0);
-                if count > MAX_REQUESTS_PER_BIN {
-                    let excess = count - MAX_REQUESTS_PER_BIN;
-                    let delete_result = query(
-                        "DELETE FROM requests WHERE bin_id = ? AND id IN (
-                            SELECT id FROM requests WHERE bin_id = ? ORDER BY id ASC LIMIT ?
-                        )"
-                    )
-                    .bind(&id)
-                    .bind(&id)
-                    .bind(excess)
-                    .execute(&state.db)
-                    .await;
-
-                    match delete_result {
-                        Ok(deleted) => {
-                            info!(%id, rows_deleted = deleted.rows_affected(), "Cleaned up old requests to maintain limit");
-                        },
-                        Err(err) => {
-                            error!(%id, %err, "Failed to clean up old requests");
-                        }
-                    }
-                }
+            info!(%id, %addr, method = %request_data.method, 
+                  headers = %request_data.headers_json, body = %request_data.body, 
+                  "Request logged");
+            
+            // Clean up old requests if needed
+            if let Err(err) = enforce_request_limit(&state, &id).await {
+                error!(%id, %err, "Failed to clean up old requests");
             }
+            
+            // Update bin timestamp
             update_last_updated(&state, &id).await.ok();
-
-            if let Some(sender) = state.bin_channels.get(&id) {
-                let payload = serde_json::json!({
-                    "method": method.to_string(),
-                    "headers": headers_json,
-                    "body": body_str,
-                    "timestamp": Utc::now().to_rfc3339(),
-                    "request_id": request_id,
-                });
-                let _ = sender.send(payload.to_string());
-            }
-
+            
+            // Send websocket notification
+            send_websocket_notification(&state, &id, &request_data).await;
+            
             Ok("Request logged".to_string())
         },
         Err(err) => {
@@ -187,27 +247,11 @@ pub async fn inspect_bin(
     Path(id): Path<String>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-    validate_uuid(&id).map_err(|e| (StatusCode::BAD_REQUEST, e).into_response())?;
+    // Validate input and check bin existence
+    validate_bin_id(&id).map_err(|e| e.into_response())?;
+    check_bin_exists(&state, &id).await.map_err(|e| e.into_response())?;
 
-    // First, check if the bin exists
-    let bin_exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM bins WHERE id = ?")
-        .bind(&id)
-        .fetch_one(&state.db)
-        .await;
-
-    match bin_exists {
-        Ok(count) if count == 0 => {
-            info!(%id, %addr, "Attempted to inspect non-existent bin");
-            return Err((StatusCode::NOT_FOUND, "Bin not found").into_response());
-        },
-        Err(err) => {
-            error!(%id, %addr, %err, "Failed to check bin existence");
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, "Failed to check bin existence").into_response());
-        },
-        _ => {} // Bin exists, continue
-    }
-
-    // Now fetch the requests for this bin
+    // Fetch the requests for this bin
     let rows = sqlx::query_as::<_, LoggedRequest>(
         r#"
         SELECT 
@@ -242,11 +286,12 @@ pub async fn delete_bin(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-    let uuid = validate_uuid(&id).map_err(|e| (StatusCode::BAD_REQUEST, e).into_response())?;
+    let uuid = validate_bin_id(&id).map_err(|e| e.into_response())?;
 
-    let result = query("DELETE FROM bins WHERE id = ?").bind(uuid.to_string())
-    .execute(&state.db)
-    .await;
+    let result = query("DELETE FROM bins WHERE id = ?")
+        .bind(uuid.to_string())
+        .execute(&state.db)
+        .await;
 
     match result {
         Ok(res) => {
@@ -258,7 +303,7 @@ pub async fn delete_bin(
             Ok("Bin deleted".to_string())
         },
         Err(err) => {
-            error!(%id, %addr,  %err, "DB error");
+            error!(%id, %addr, %err, "DB error");
             Err((StatusCode::NOT_FOUND, "Bin not found or error deleting Bin").into_response())     
         }
     }
@@ -269,11 +314,12 @@ pub async fn delete_request(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-    let uuid = validate_uuid(&id).map_err(|e| (StatusCode::BAD_REQUEST, e).into_response())?;
+    let uuid = validate_bin_id(&id).map_err(|e| e.into_response())?;
 
-    let result = query("DELETE FROM requests WHERE request_id = ?").bind(uuid)
-    .execute(&state.db)
-    .await;
+    let result = query("DELETE FROM requests WHERE request_id = ?")
+        .bind(uuid)
+        .execute(&state.db)
+        .await;
 
     match result {
         Ok(res) => {
@@ -285,7 +331,7 @@ pub async fn delete_request(
             Ok("Request deleted".to_string())
         },
         Err(err) => {
-            error!(%id, %addr,  %err, "DB error");
+            error!(%id, %addr, %err, "DB error");
             Err((StatusCode::NOT_FOUND, "Request not found or error deleting request").into_response())     
         }
     }

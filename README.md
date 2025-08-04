@@ -2,6 +2,8 @@
 
 A fast, self-hostable request bin for debugging webhooks and HTTP requests.
 
+rustbin is accessible online at https://rustb.in, or read below to deploy it yourself.
+
 ## Features
 
 - **Capture HTTP requests** - Create bins to collect and inspect incoming requests

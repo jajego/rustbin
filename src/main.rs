@@ -22,7 +22,7 @@ async fn main() {
         .init();
 
     let app_state = state::AppState::new().await.expect("Failed to init DB");
-    tasks::cleanup::start_cleanup_task(app_state.db.clone()).await;
+    tasks::cleanup::start_cleanup_task(app_state.db.clone(), app_state.bin_channels.clone()).await;
 
     let governor_conf = Arc::new(
        GovernorConfigBuilder::default()

@@ -9,9 +9,7 @@ rustbin is accessible online at https://rustb.in, or read below to deploy it you
 - **Capture HTTP requests** - Create bins to collect and inspect incoming requests
 - **Real-time updates** - WebSocket support for live request monitoring  
 - **Request storage** - Configurable limits with automatic cleanup
-- **Rate limiting** - Built-in protection against abuse
 - **SQLite storage** - No external database required
-- **Zero-config** - Runs out of the box with sensible defaults
 
 ## Quick Start
 
